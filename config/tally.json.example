@@ -1,0 +1,81 @@
+{
+  "enabled": true,
+  "modules": {
+    "ld2410": false,
+    "thermal": false,
+    "crowd_ble": true,
+    "crowd_wifi": false,
+    "bme280": false
+  },
+  "registration": {
+    "email": "",
+    "license_key": "",
+    "registered": false
+  },
+  "zones": {
+    "entrance": {
+      "label": "Entrance",
+      "direction_a_label": "Inbound",
+      "direction_b_label": "Outbound",
+      "module": "thermal"
+    },
+    "driveway": {
+      "label": "Driveway",
+      "direction_a_label": "Inbound",
+      "direction_b_label": "Outbound",
+      "module": "ld2410"
+    }
+  },
+  "ld2410": {
+    "A": {"port": "/dev/ttyUSB0"},
+    "B": {"port": "/dev/ttyUSB1"},
+    "sequence_window_s": 0.8,
+    "parked_timeout_s": 180,
+    "min_energy": 20,
+    "toward_reference": "A_to_B",
+    "zone": "driveway"
+  },
+  "thermal": {
+    "i2c_bus": 1,
+    "i2c_address": "0x33",
+    "frame_rate_hz": 4,
+    "min_blob_size": 6,
+    "mount_height_m": 3.0,
+    "mount_angle_deg": 90,
+    "mount_distance_m": 5.0,
+    "parked_timeout_s": 180,
+    "zone": "entrance"
+  },
+  "crowd_scan": {
+    "ble_enabled": true,
+    "wifi_enabled": false,
+    "wifi_interface": "wlan1",
+    "interval_s": 60,
+    "device_offset": 0,
+    "crowd_threshold": 0
+  },
+  "bme280": {
+    "i2c_bus": 1,
+    "i2c_address": "0x76",
+    "poll_interval_s": 600,
+    "display_unit": "F"
+  },
+  "triggers": {
+    "entrance_direction_a": {"enabled": false, "playlist": "", "cooldown_s": 30, "play_timeout_s": 60},
+    "entrance_direction_b": {"enabled": false, "playlist": "", "cooldown_s": 30, "play_timeout_s": 60},
+    "entrance_parked":      {"enabled": false, "playlist": "", "cooldown_s": 30, "play_timeout_s": 60},
+    "driveway_direction_a": {"enabled": false, "playlist": "", "cooldown_s": 30, "play_timeout_s": 60},
+    "driveway_direction_b": {"enabled": false, "playlist": "", "cooldown_s": 30, "play_timeout_s": 60},
+    "driveway_parked":      {"enabled": false, "playlist": "", "cooldown_s": 30, "play_timeout_s": 60},
+    "crowd_threshold":      {"enabled": false, "playlist": "", "cooldown_s": 300, "play_timeout_s": 60}
+  },
+  "mqtt": {
+    "enabled": false,
+    "base": "tally",
+    "device_name": "Tally Vehicle Counter"
+  },
+  "calibration": {
+    "password_hash": "",
+    "session_timeout_min": 30
+  }
+}

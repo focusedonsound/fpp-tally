@@ -1,0 +1,21 @@
+[
+  {
+    "name": "Tally - Trigger Test Vehicle Event",
+    "description": "Simulate a vehicle pass event for the given zone, without any real sensor hardware — useful for verifying DB/MQTT/FPP-trigger wiring during setup.",
+    "script": "tally_cmd_test_vehicle.sh",
+    "args": [
+      {
+        "type": "string",
+        "name": "zone",
+        "description": "Zone name (e.g. entrance, driveway) — must match a zone defined in Tally's Setup page.",
+        "defaultValue": "driveway"
+      }
+    ]
+  },
+  {
+    "name": "Tally - Trigger Test Crowd Scan",
+    "description": "Simulate a crowd/device scan result without real BLE/WiFi hardware — useful for verifying DB/MQTT wiring during setup.",
+    "script": "tally_cmd_test_crowd.sh",
+    "args": []
+  }
+]

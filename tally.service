@@ -1,0 +1,21 @@
+[Unit]
+Description=Tally Vehicle & Crowd Counter Daemon
+After=local-fs.target network.target fppd.service
+
+[Service]
+Type=simple
+User=fpp
+Group=fpp
+WorkingDirectory=/home/fpp/media/plugins/fpp-tally/daemon
+Environment=PYTHONPATH=/home/fpp/media/plugins/fpp-tally/daemon
+ExecStartPre=/bin/mkdir -p /home/fpp/media/logs
+ExecStart=/usr/bin/python3 /home/fpp/media/plugins/fpp-tally/daemon/tally_daemon.py
+Restart=on-failure
+RestartSec=15
+StartLimitBurst=4
+StartLimitIntervalSec=300
+StandardOutput=append:/home/fpp/media/logs/plugin-fpp-tally.log
+StandardError=append:/home/fpp/media/logs/plugin-fpp-tally.log
+
+[Install]
+WantedBy=multi-user.target

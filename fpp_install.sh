@@ -1,0 +1,137 @@
+#!/bin/bash
+# fpp_install.sh — Tally plugin installer
+# Called by FPP when the plugin is installed or updated.
+
+PLUGIN_DIR="$(dirname "$0")"
+
+: "${FPPDIR:=/opt/fpp}"
+. "${FPPDIR}/scripts/common" 2>/dev/null || true
+LOGDIR="$(getSetting logDirectory 2>/dev/null)"
+LOGDIR="${LOGDIR:-/home/fpp/media/logs}"
+LOGFILE="${LOGDIR}/plugin-fpp-tally.log"
+
+log() {
+    local msg="[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+    mkdir -p "$LOGDIR" 2>/dev/null || true
+    echo "$msg" >> "$LOGFILE" 2>/dev/null || echo "$msg"
+}
+
+log "=== Tally install started (user=$(whoami), uid=$(id -u)) ==="
+
+# ── Create media directories ─────────────────────────────────────
+mkdir -p /home/fpp/media/config
+mkdir -p /home/fpp/media/plugins/fpp-tally/state
+
+# pluginInfo.json's dependencies.packages block already declares the apt
+# packages this plugin needs, so FPP 10+ installs them before this script
+# runs (FPP_DEPS_RESOLVED=1 is exported in that case). Only install them by
+# hand here as a fallback for FPP 9, which silently ignores the dependencies
+# block.
+if [ -z "${FPP_DEPS_RESOLVED:-}" ]; then
+    log "Installing system packages via apt-get..."
+    if apt-get install -y --no-install-recommends \
+        sqlite3 \
+        python3-pip \
+        python3-smbus \
+        python3-serial \
+        python3-paho-mqtt \
+        >> "$LOGFILE" 2>&1; then
+        log "apt-get packages installed OK"
+    else
+        log "WARN: apt-get failed or partial — one or more Python deps may be missing"
+    fi
+else
+    log "Dependencies already resolved by FPP (FPP_DEPS_RESOLVED=1); skipping manual apt-get."
+fi
+
+# ── Optional: BLE / MLX90640 / BME280 python libraries ────────────
+# Not declared in pluginInfo.json's dependencies (only needed by builders
+# who enable those specific hardware-selection checkboxes), and some aren't
+# on apt at all -- pip is the right tool here per the plugin guidelines'
+# ad-hoc install rule. Installs into FPP's system Python, best-effort: a
+# failure here disables only that module, never the whole plugin.
+if python3 -m pip --version >/dev/null 2>&1; then
+    log "Installing optional sensor-module Python libraries..."
+    python3 -m pip install --quiet --break-system-packages \
+        bleak adafruit-circuitpython-mlx90640 adafruit-circuitpython-bme280 \
+        >> "$LOGFILE" 2>&1 \
+        || log "WARN: one or more optional libraries failed to install (non-fatal — that module stays disabled until resolved)"
+fi
+
+# ── Make scripts executable ──────────────────────────────────────
+log "Setting script permissions..."
+chmod +x "${PLUGIN_DIR}/daemon/"*.py 2>/dev/null || true
+chmod +x "${PLUGIN_DIR}/daemon/modules/"*.py 2>/dev/null || true
+chmod +x "${PLUGIN_DIR}/commands/"*.sh 2>/dev/null || true
+chmod +x "${PLUGIN_DIR}/callbacks.sh" 2>/dev/null || true
+
+# ── Write default config if none exists ─────────────────────────
+CONFIG="/home/fpp/media/config/tally.json"
+if [[ ! -f "$CONFIG" ]]; then
+    log "Writing default config to $CONFIG"
+    cp "${PLUGIN_DIR}/config/tally.json.example" "$CONFIG" 2>/dev/null \
+        || log "WARN: could not copy default config"
+fi
+
+# ── Hidden camera calibration mode: fail-safe reset ──────────────
+# Section 6 of the project spec: calibration mode must default OFF after
+# every boot or service restart, regardless of prior state. The install
+# script is not itself a boot hook, but this covers the "just installed /
+# just updated" case; callbacks.sh's pluginStart does the same reset on
+# every actual boot.
+rm -f "/home/fpp/media/plugins/fpp-tally/state/calib_session.json" 2>/dev/null || true
+
+# ── Systemd service ───────────────────────────────────────────────
+SERVICE_SRC="${PLUGIN_DIR}/tally.service"
+SERVICE_DST="/etc/systemd/system/tally.service"
+
+if [[ -f "$SERVICE_SRC" ]]; then
+    log "Installing systemd service..."
+    cp "$SERVICE_SRC" "$SERVICE_DST" && log "Service file copied OK" || log "WARN: could not copy service file"
+    systemctl daemon-reload >> "$LOGFILE" 2>&1 && log "systemctl daemon-reload OK" || log "WARN: daemon-reload failed"
+    systemctl enable tally >> "$LOGFILE" 2>&1 && log "tally enabled OK" || log "WARN: enable failed"
+    if systemctl restart tally >> "$LOGFILE" 2>&1; then
+        log "tally service started OK"
+    else
+        log "WARN: could not start tally service (non-fatal — daemon can be started manually)"
+    fi
+else
+    log "WARN: tally.service not found in plugin dir — skipping systemd install"
+fi
+
+# ── Sudoers rule for fpp user ────────────────────────────────────
+# FPP runs as root but its web UI (PHP) and plugin callbacks run as the
+# 'fpp' user. Without this rule, 'systemctl start/stop tally' from
+# callbacks.sh or the Setup page's daemon controls returns "Interactive
+# authentication required" and silently falls back to a bare nohup launch
+# (no auto-restart on crash). This rule grants the fpp user passwordless
+# control of this one service only.
+SUDOERS_FILE="/etc/sudoers.d/tally"
+cat > "${SUDOERS_FILE}.tmp" << 'SUDOEOF'
+# Tally — allow fpp user to control its own daemon service without a
+# password prompt. Scope is intentionally limited to this service.
+fpp ALL=(ALL) NOPASSWD: \
+    /bin/systemctl start tally, \
+    /bin/systemctl stop tally, \
+    /bin/systemctl restart tally, \
+    /bin/systemctl is-active tally, \
+    /bin/systemctl is-enabled tally, \
+    /usr/bin/systemctl start tally, \
+    /usr/bin/systemctl stop tally, \
+    /usr/bin/systemctl restart tally, \
+    /usr/bin/systemctl is-active tally, \
+    /usr/bin/systemctl is-enabled tally
+SUDOEOF
+chmod 0440 "${SUDOERS_FILE}.tmp"
+if visudo -cf "${SUDOERS_FILE}.tmp" >> "$LOGFILE" 2>&1; then
+    mv "${SUDOERS_FILE}.tmp" "$SUDOERS_FILE"
+    log "Sudoers rule installed: $SUDOERS_FILE"
+else
+    rm -f "${SUDOERS_FILE}.tmp"
+    log "WARN: sudoers rule validation failed — rule not installed (daemon control may require manual start)"
+fi
+
+setSetting restartFlag 1 2>/dev/null || true
+
+log "=== Tally install complete ==="
+exit 0

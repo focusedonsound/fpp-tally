@@ -1,0 +1,30 @@
+{
+  "repoName": "fpp-tally",
+  "name": "Tally",
+  "author": "Nick Scilingo (FocusedOnSound)",
+  "description": "Tally counts vehicles passing your holiday light show, classifies pass-through vs. parked-to-watch, tracks direction, optionally estimates nearby-device/crowd counts, and can trigger FPP playlists live in response to traffic. Modular hardware support: HLK-LD2410B radar and/or MLX90640 thermal array, with optional BLE/WiFi crowd estimation and BME280 environment logging. Free for personal use.",
+  "homeURL": "https://github.com/focusedonsound/fpp-tally",
+  "srcURL": "https://github.com/focusedonsound/fpp-tally.git",
+  "bugURL": "https://github.com/focusedonsound/fpp-tally/issues",
+  "allowUpdates": 1,
+  "versions": [
+    {
+      "minFPPVersion": "9.0",
+      "maxFPPVersion": "9.99",
+      "branch": "main",
+      "sha": "",
+      "dependencies": {
+        "packages": ["sqlite3", "python3-pip", "python3-smbus", "python3-serial", "python3-paho-mqtt"]
+      }
+    },
+    {
+      "minFPPVersion": "10.0",
+      "maxFPPVersion": "0",
+      "branch": "main",
+      "sha": "",
+      "dependencies": {
+        "packages": ["sqlite3", "python3-pip", "python3-smbus", "python3-serial", "python3-paho-mqtt"]
+      }
+    }
+  ]
+}
