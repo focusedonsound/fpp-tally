@@ -43,6 +43,16 @@ except ImportError:
 _STATE_DIR = "/home/fpp/media/plugins/fpp-tally/state"
 LIVE_STATE_FILE = os.path.join(_STATE_DIR, "ld2410_live.json")
 
+# How long a reader can go without a single successfully-decoded report
+# before the module assumes the radar itself has gone quiet (not the USB
+# device -- that would show up as a read exception, which is handled
+# separately) and tries a full close/reopen/re-handshake. Long enough
+# that normal inter-report gaps and one-off garbled frames (already
+# filtered by decode_eng_frame's plausibility bound) never trigger it;
+# short enough that a real hang gets noticed and self-healed well within
+# a single show cue rather than needing a manual daemon restart.
+_RECONNECT_TIMEOUT_S = 15.0
+
 
 class _RadarReader:
     """Owns one LD2410B's serial port, presence state, and the latest
@@ -58,6 +68,7 @@ class _RadarReader:
         self.engineering = False
         self.last_report = None  # proto.Ld2410Report | proto.Ld2410EngReport | None
         self.last_report_ts = 0.0
+        self._last_reconnect_attempt = 0.0
 
     def open(self) -> bool:
         if not SERIAL_AVAILABLE:
@@ -97,6 +108,34 @@ class _RadarReader:
                 self._ser.close()
             except Exception:
                 pass
+
+    def reconnect(self) -> bool:
+        """Close and reopen the port, redoing the engineering-mode
+        handshake. Called by the module's watchdog when a previously-
+        working reader has gone silent for _RECONNECT_TIMEOUT_S.
+
+        Confirmed on real hardware this silence happens with NO exception
+        and NO empty read ever logged: the USB-serial adapter stays
+        enumerated (poll_present()'s self._ser.read() keeps succeeding),
+        but the radar itself stops putting anything on the UART, so
+        there's nothing for read()'s try/except to catch. A watchdog on
+        report *age* -- not on read errors -- is the only way to notice
+        this at all, which is exactly why it went unexplained before:
+        the daemon looked alive (live-state file still updating on
+        schedule) with no warning anywhere about why the radar itself had
+        gone quiet."""
+        self._last_reconnect_attempt = time.time()
+        self.log.warning("LD2410B %s: no valid report in over %.0fs — reconnecting",
+                          self.side, _RECONNECT_TIMEOUT_S)
+        self.close()
+        self._ser = None
+        ok = self.open()
+        if ok:
+            # Give the reconnect a fresh timeout window rather than
+            # immediately re-triggering the watchdog before the first
+            # post-reconnect frame has had a chance to arrive.
+            self.last_report_ts = time.time()
+        return ok
 
     def poll_present(self) -> Optional[bool]:
         """Returns True/False if a fresh report was decoded, None if no new
@@ -276,6 +315,19 @@ class LD2410Module(SensorModule):
             for side, reader, parked in (("A", reader_a, parked_a), ("B", reader_b, parked_b)):
                 if reader._ser is None:
                     continue
+
+                # Watchdog: a reader that has received at least one report
+                # before but has gone quiet for too long gets a full
+                # reconnect attempt. Throttled by _last_reconnect_attempt
+                # so a reconnect that doesn't actually fix anything
+                # retries at most once per timeout window instead of
+                # hammering the port every 0.05s tick.
+                if (reader.last_report_ts
+                        and (now - reader.last_report_ts) > _RECONNECT_TIMEOUT_S
+                        and (now - reader._last_reconnect_attempt) > _RECONNECT_TIMEOUT_S):
+                    reader.reconnect()
+                    continue
+
                 present = reader.poll_present()
                 if present is None:
                     continue
