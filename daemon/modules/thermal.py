@@ -184,6 +184,7 @@ class ThermalModule(SensorModule):
         frame_buf = [0.0] * GRID_SIZE
         track: Optional[_Track] = None
         frame_period_s = 1.0 / frame_rate_hz
+        last_live_write = 0.0
 
         while not self._stop.is_set():
             loop_start = time.time()
@@ -237,6 +238,27 @@ class ThermalModule(SensorModule):
                 else:
                     self.log.debug("[Thermal] track dropped — insufficient travel (%.1f cols)", cols_traveled)
                 track = None
+
+            # Live-diagnostics state for the Diagnostics page's thermal
+            # grid, throttled independent of frame_rate_hz (a 16Hz sensor
+            # doesn't need 16 disk writes/sec for a human-watched view).
+            # Ephemeral/overwritten-every-write, never persisted to the DB
+            # -- see _write_live_state()'s docstring.
+            if (now - last_live_write) >= 0.5:
+                last_live_write = now
+                self._write_live_state("thermal_live.json", {
+                    "zone": zone,
+                    "cols": GRID_COLS,
+                    "rows": GRID_ROWS,
+                    "delta_c": [round(d, 1) for d in delta],
+                    "delta_threshold_c": delta_threshold_c,
+                    "blobs": [
+                        {"row": round(r, 1), "col": round(c, 1), "size": n}
+                        for r, c, n in blobs
+                    ],
+                    "tracking": track is not None,
+                    "track_dwell_s": track.dwell_s(now) if track is not None else None,
+                })
 
             elapsed_loop = time.time() - loop_start
             time.sleep(max(0.0, frame_period_s - elapsed_loop))

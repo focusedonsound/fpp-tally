@@ -207,19 +207,60 @@ backend's premium-tier logic once that's actually defined.
   - **Raw BLE scan**: the sorted list of unique addresses from the most
     recent scan window, not just the count.
   - **Raw WiFi scan**: same, for probe-request source addresses.
+  - **MLX90640 thermal delta grid**: the 32×24 background-subtracted heat
+    grid rendered as a canvas heatmap, with the currently-tracked blob(s)
+    circled. Real detection logic, same as the daemon's own
+    frame-differencing/blob-tracking pipeline — not yet hardware-validated
+    (no MLX90640 available during development), so treat the color
+    scaling as a starting point to eyeball-tune once you have the sensor.
+  - **Camera Reference panel**: a live snapshot (refreshed every 1.5s),
+    positioned next to the radar readout specifically so you can watch a
+    car cross the zone and see which gate lights up / which thermal blob
+    tracks it at the same real-world position — useful for tuning
+    `min_energy`, gate-based thresholds, and mount angle/height without
+    guessing. Reuses the same camera-capture approach as the hidden
+    calibration route (`ffmpeg` + V4L2), but as its own endpoint
+    (`diag_snapshot.php`) so that route stays untouched and unreferenced
+    by this now-discoverable page.
   - Each panel shows a "stale" badge once its source module hasn't
-    written fresh data in the last few seconds (e.g. module disabled, or
-    daemon stopped) rather than showing frozen data as if it were live.
+    written fresh data in the expected window (e.g. module disabled, or
+    daemon stopped) rather than showing frozen data as if it were live —
+    BLE/WiFi judge staleness against their own configured scan interval,
+    not a fixed timer, after real testing showed a 30s-interval scan
+    sitting "Stale" for 25+ of every 30 seconds under a naive fixed
+    threshold.
+- **Camera panel access control**: off by default
+  (`calibration.require_password_on_diagnostics: false` in tally.json) —
+  during active development on a build only you can reach, the camera
+  panel just works, same as the rest of the Diagnostics page. **Flip
+  this to `true` before handing the build to anyone else** (or leaving it
+  reachable on a network you don't fully trust); doing so gates the
+  panel behind the same bcrypt password + session the hidden calibration
+  route already uses (`calibration.password_hash` — see "Camera
+  calibration mode" below for how to set it). The two routes intentionally
+  share that one session: unlocking the camera on either page unlocks it
+  on both, since it's the same grant.
 - **WiFi crowd-scan now defaults to the onboard adapter (`wlan0`)**
   instead of assuming a second USB adapter is always required. This is
   only safe when the Pi reaches its own network some other way (e.g.
   Ethernet) — see the Setup page's Crowd Scan Config card and the README
   section above for when you need a second adapter instead. Not
   auto-detected: network state can change after any check Tally could do.
-  Not yet re-validated against real WiFi crowd-scan hardware (this pass
-  changed the default and added the Diagnostics readout; the underlying
-  scan logic is unchanged from v0.6.0's own not-yet-hardware-validated
-  state for this module).
+- **Two real bugs found and fixed testing this on 192.168.0.51**, on top
+  of the ones already logged in v0.6.0:
+  - Engineering-mode LD2410 frames had no plausibility bound on the
+    distance fields (the basic-mode decoder already had one) — occasional
+    USB-serial noise garbled a distance to a bogus ~32,000+ cm value,
+    which the Diagnostics page would briefly display as a nonsense
+    reading. Fixed by rejecting implausible frames outright, same bound
+    the basic decoder already used.
+  - The Reporting page's temperature/humidity card and history chart only
+    checked `modules['bme280']` to decide whether to show themselves, so
+    an install running DHT11 without BME280 — like 192.168.0.51 — had
+    real temperature data being logged and MQTT-published the whole time
+    with genuinely no way to see it on the Reporting page. Fixed to check
+    `bme280 OR dht11`, matching the check the MQTT/HA-discovery code
+    already had right.
 
 ## Installation
 
@@ -265,6 +306,14 @@ php -r 'echo password_hash("your-password-here", PASSWORD_BCRYPT), PHP_EOL;'
 Paste the result into `tally.json`'s `calibration.password_hash`. This mode
 is not a community build option — see `BUILD_GUIDE.md` section on the
 hidden camera and the project spec for why.
+
+The same password also gates the **Diagnostics page's** camera panel, but
+only once you turn that on — set `tally.json`'s
+`calibration.require_password_on_diagnostics` to `true` (it defaults to
+`false`, since the Diagnostics page is Setup-linked and visible, not
+hidden like the calibration route). Like the password hash itself, this
+is a hand-edit-the-config setting, not exposed anywhere in the web UI —
+flip it before deploying anywhere you don't fully control access to.
 
 ## Requirements
 

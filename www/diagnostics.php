@@ -1,10 +1,18 @@
 <?php
 // diagnostics.php — Tally Diagnostics page.
 // Live-only view (never touches the database) of exactly what the
-// sensors are currently seeing: per-gate LD2410B engineering-mode energy
-// for sides A/B, and the raw BLE/WiFi address lists from the most recent
-// crowd scan. Polls diag_status.php, which itself just reads the
-// ephemeral live-state JSON files each module writes.
+// sensors are currently seeing: a camera preview for visual reference,
+// per-gate LD2410B engineering-mode energy for sides A/B, the MLX90640
+// thermal delta grid, and the raw BLE/WiFi address lists from the most
+// recent crowd scan. Camera + radar/thermal are shown together so you
+// can watch a car cross the zone and see exactly which gate/blob
+// corresponds to which real-world position, for tuning thresholds.
+//
+// The camera panel is unlocked by default (see calibration.require_
+// password_on_diagnostics in tally.json/diag_snapshot.php) -- meant for
+// active development on a build you already control physical/network
+// access to. Flip that config flag on before handing this build to
+// anyone else; see README.md.
 ini_set('display_errors', '0');
 ?>
 <style>
@@ -25,6 +33,10 @@ ini_set('display_errors', '0');
 .diag-addr-count { font-size: 1.6rem; font-weight: 700; }
 .diag-legend { font-size: .75rem; color: #999; margin-bottom: .5rem; }
 .diag-legend .sw { display: inline-block; width: .7rem; height: .7rem; border-radius: 2px; margin-right: .25rem; vertical-align: middle; }
+.diag-cam-frame { background: #000; border: 1px solid rgba(255,255,255,0.12); border-radius: .4rem; min-height: 220px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.diag-cam-frame img { max-width: 100%; display: block; }
+.diag-cam-auth input[type=password] { width: 100%; padding: .5rem; margin: .5rem 0; background: rgba(255,255,255,0.06); border: 1px solid #555; color: inherit; border-radius: 4px; }
+#diagThermalCanvas { border: 1px solid rgba(255,255,255,0.12); border-radius: .3rem; image-rendering: pixelated; }
 </style>
 
 <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
@@ -32,15 +44,44 @@ ini_set('display_errors', '0');
   <span class="text-muted small">Live view only — nothing on this page is written to the database.</span>
 </div>
 
-<div class="tally-card" id="diagLd2410Card">
-  <h4><i class="fas fa-fw fa-radar"></i> LD2410B Radar — Per-Gate Readout</h4>
-  <div class="diag-legend">
-    <span class="sw" style="background:#36a2eb;"></span> Moving energy
-    &nbsp;&nbsp;<span class="sw" style="background:#ff9f40;"></span> Static energy
-    &nbsp;&nbsp;each gate ≈ 0.75&nbsp;m, gate 0 nearest the sensor
+<div class="row">
+  <div class="col-lg-5">
+    <div class="tally-card" id="diagCamCard">
+      <h4><i class="fas fa-fw fa-camera"></i> Camera Reference</h4>
+      <div class="diag-cam-frame">
+        <img id="diagCamImg" alt="camera preview" style="display:none;">
+        <span id="diagCamMsg" class="text-muted small">Loading…</span>
+      </div>
+      <p class="text-muted small mt-2 mb-0" id="diagCamStatus"></p>
+      <div id="diagCamAuth" class="diag-cam-auth mt-2" style="display:none;">
+        <label class="form-label small mb-0">Calibration password required</label>
+        <input type="password" id="diagCamPassword" placeholder="Password">
+        <button type="button" class="tally-btn tally-btn-sm" onclick="diagCamActivate()">
+          <i class="fas fa-unlock"></i> Unlock Camera
+        </button>
+        <div class="text-danger small mt-1" id="diagCamAuthError"></div>
+      </div>
+    </div>
   </div>
-  <div id="diagLd2410Body" class="row g-4">
-    <div class="col-12 text-muted small">Loading…</div>
+  <div class="col-lg-7">
+    <div class="tally-card" id="diagLd2410Card">
+      <h4><i class="fas fa-fw fa-satellite-dish"></i> LD2410B Radar — Per-Gate Readout</h4>
+      <div class="diag-legend">
+        <span class="sw" style="background:#36a2eb;"></span> Moving energy
+        &nbsp;&nbsp;<span class="sw" style="background:#ff9f40;"></span> Static energy
+        &nbsp;&nbsp;each gate ≈ 0.75&nbsp;m, gate 0 nearest the sensor
+      </div>
+      <div id="diagLd2410Body" class="row g-4">
+        <div class="col-12 text-muted small">Loading…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="tally-card" id="diagThermalCard">
+  <h4><i class="fas fa-fw fa-fire"></i> MLX90640 Thermal — Delta Grid</h4>
+  <div id="diagThermalBody">
+    <div class="text-muted small">Loading…</div>
   </div>
 </div>
 
@@ -135,6 +176,119 @@ function diagAddrList(bodyEl, data, moduleEnabled, offlineNote) {
   bodyEl.innerHTML = html;
 }
 
+// --- Thermal grid -----------------------------------------------------
+function diagThermalColor(delta, threshold) {
+  // Simple black -> orange -> white heatmap, normalized against the
+  // module's own foreground threshold so "just crossed into foreground"
+  // reads as a visible warm color, not a barely-there tint.
+  const t = Math.max(0, Math.min(1, delta / (threshold * 3)));
+  const r = Math.round(255 * Math.min(1, t * 2));
+  const g = Math.round(180 * Math.max(0, t * 2 - 0.5));
+  const b = Math.round(60 * Math.max(0, t - 0.8) * 5);
+  return `rgb(${r},${g},${b})`;
+}
+
+function diagRenderThermal(bodyEl, data, moduleEnabled) {
+  if (!moduleEnabled) {
+    bodyEl.innerHTML = `<div class="text-muted small">Module not enabled in Setup.</div>`;
+    return;
+  }
+  if (!data) {
+    bodyEl.innerHTML = `<div class="text-muted small">No thermal data yet — waiting for the daemon.</div>`;
+    return;
+  }
+
+  let canvas = document.getElementById('diagThermalCanvas');
+  if (!canvas) {
+    bodyEl.innerHTML = '<canvas id="diagThermalCanvas"></canvas><div class="text-muted small mt-2" id="diagThermalMeta"></div>';
+    canvas = document.getElementById('diagThermalCanvas');
+  }
+  const cellPx = 10;
+  canvas.width = data.cols * cellPx;
+  canvas.height = data.rows * cellPx;
+  const ctx = canvas.getContext('2d');
+  for (let r = 0; r < data.rows; r++) {
+    for (let c = 0; c < data.cols; c++) {
+      const v = data.delta_c[r * data.cols + c] ?? 0;
+      ctx.fillStyle = diagThermalColor(v, data.delta_threshold_c);
+      ctx.fillRect(c * cellPx, r * cellPx, cellPx, cellPx);
+    }
+  }
+  ctx.strokeStyle = '#36a2eb';
+  ctx.lineWidth = 2;
+  for (const b of (data.blobs || [])) {
+    ctx.beginPath();
+    ctx.arc(b.col * cellPx + cellPx / 2, b.row * cellPx + cellPx / 2, cellPx * 1.2, 0, 2 * Math.PI);
+    ctx.stroke();
+  }
+
+  const meta = document.getElementById('diagThermalMeta');
+  if (meta) {
+    const stale = data.stale ? diagBadge('Stale', 'tally-badge-stale') : '';
+    meta.innerHTML = `${(data.blobs || []).length} blob(s) above threshold${data.tracking ? ` — tracking (dwell ${data.track_dwell_s ?? 0}s)` : ''} ${stale}`;
+  }
+}
+
+// --- Camera -------------------------------------------------------------
+let diagCamRequirePassword = false;
+let diagCamAuthed = false;
+let diagCamTimer = null;
+
+function diagCamRefresh() {
+  const img = document.getElementById('diagCamImg');
+  const msg = document.getElementById('diagCamMsg');
+  const status = document.getElementById('diagCamStatus');
+  const probe = new Image();
+  probe.onload = () => {
+    img.src = probe.src;
+    img.style.display = '';
+    msg.style.display = 'none';
+    status.textContent = 'Updated ' + new Date().toLocaleTimeString();
+  };
+  probe.onerror = () => {
+    img.style.display = 'none';
+    msg.style.display = '';
+    if (diagCamRequirePassword && !diagCamAuthed) {
+      msg.textContent = 'Password required.';
+      document.getElementById('diagCamAuth').style.display = '';
+    } else {
+      msg.textContent = 'Camera capture failed — check the configured device and the plugin log.';
+    }
+  };
+  probe.src = 'plugin.php?plugin=fpp-tally&page=www/diag_snapshot.php&nopage=1&t=' + Date.now();
+}
+
+function diagCamStart() {
+  if (diagCamTimer) return;
+  document.getElementById('diagCamAuth').style.display = 'none';
+  diagCamRefresh();
+  diagCamTimer = setInterval(diagCamRefresh, 1500);
+}
+
+async function diagCamActivate() {
+  const pw = document.getElementById('diagCamPassword').value;
+  const errEl = document.getElementById('diagCamAuthError');
+  errEl.textContent = '';
+  try {
+    const fd = new FormData();
+    fd.append('action', 'activate');
+    fd.append('password', pw);
+    const res = await fetch('plugin.php?plugin=fpp-tally&page=www/diag_snapshot.php&nopage=1', { method: 'POST', body: fd, cache: 'no-store' });
+    const data = await res.json();
+    if (data.ok) {
+      diagCamAuthed = true;
+      diagCamStart();
+    } else {
+      errEl.textContent = data.error || 'Activation failed.';
+    }
+  } catch (e) {
+    errEl.textContent = 'Request failed.';
+  }
+}
+
+// --- Main poll loop -----------------------------------------------------
+let diagCamInitDone = false;
+
 async function diagPoll() {
   let data;
   try {
@@ -142,6 +296,18 @@ async function diagPoll() {
     data = await res.json();
   } catch (e) {
     return;
+  }
+
+  if (!diagCamInitDone) {
+    diagCamInitDone = true;
+    diagCamRequirePassword = !!(data.camera && data.camera.require_password);
+    if (!diagCamRequirePassword) {
+      diagCamStart();
+    } else {
+      // Try once unprompted in case a session from the hidden calibration
+      // route (or an earlier unlock on this page) is already active.
+      diagCamRefresh();
+    }
   }
 
   const ld2410Body = document.getElementById('diagLd2410Body');
@@ -161,6 +327,8 @@ async function diagPoll() {
       </div>`;
   }
 
+  diagRenderThermal(document.getElementById('diagThermalBody'), data.thermal, data.modules.thermal);
+
   diagAddrList(document.getElementById('diagBleBody'), data.crowd_ble, data.modules.crowd_ble, null);
   diagAddrList(document.getElementById('diagWifiBody'), data.crowd_wifi, data.modules.crowd_wifi,
     `Interface: ${data.wifi_interface}. Requires monitor mode + elevated privileges — see the Setup page's Crowd Scan Config warning if this stays empty.`);
@@ -168,5 +336,8 @@ async function diagPoll() {
 
 diagPoll();
 const diagInterval = setInterval(diagPoll, 1000);
-window.addEventListener('beforeunload', () => clearInterval(diagInterval));
+window.addEventListener('beforeunload', () => {
+  clearInterval(diagInterval);
+  if (diagCamTimer) clearInterval(diagCamTimer);
+});
 </script>

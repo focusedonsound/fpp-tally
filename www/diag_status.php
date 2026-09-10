@@ -47,17 +47,23 @@ if (file_exists($CONFIG_FILE)) {
 }
 $modules = $cfg['modules'] ?? [];
 $cs      = $cfg['crowd_scan'] ?? [];
+$calib   = $cfg['calibration'] ?? [];
 
 $result = [
     "modules"        => [
         "ld2410"     => !empty($modules['ld2410']),
         "crowd_ble"  => !empty($modules['crowd_ble']),
         "crowd_wifi" => !empty($modules['crowd_wifi']),
+        "thermal"    => !empty($modules['thermal']),
     ],
     "wifi_interface" => $cs['wifi_interface'] ?? 'wlan0',
+    "camera"         => [
+        "require_password" => !empty($calib['require_password_on_diagnostics']),
+    ],
     "ld2410"         => withStale(readJsonFile("$STATE_DIR/ld2410_live.json")),
     "crowd_ble"      => withStale(readJsonFile("$STATE_DIR/crowd_ble_live.json")),
     "crowd_wifi"     => withStale(readJsonFile("$STATE_DIR/crowd_wifi_live.json")),
+    "thermal"        => withStale(readJsonFile("$STATE_DIR/thermal_live.json"), 3.0),
 ];
 
 echo json_encode($result);
