@@ -43,14 +43,63 @@ $cfg["modules"] = [
 ];
 
 // ── Registration (soft gate on the web UI only — see tally_config.py) ────
+// Calls fpp-tally-license-server's /api/register. Registration is a soft
+// gate on the Setup/Reporting pages only -- the daemon never consults this
+// flag (see tally_config.is_registered()'s docstring), so a network
+// failure here must never block saving the rest of the form.
+function tally_hwid() {
+    $cpuinfo = @file_get_contents('/proc/cpuinfo');
+    if ($cpuinfo !== false && preg_match('/^Serial\s*:\s*([0-9a-fA-F]+)/m', $cpuinfo, $m)) {
+        $serial = $m[1];
+        if ($serial !== '' && $serial !== str_repeat('0', strlen($serial))) {
+            return 'cpu-' . $serial;
+        }
+    }
+    $machineId = @file_get_contents('/etc/machine-id');
+    if ($machineId !== false && trim($machineId) !== '') {
+        return 'machine-' . trim($machineId);
+    }
+    return 'unknown';
+}
+
+function tally_register($email, $licenseKey) {
+    $payload = json_encode(['email' => $email, 'hwid' => tally_hwid(), 'licenseKey' => $licenseKey]);
+    $ctx = stream_context_create([
+        'http' => [
+            'method'  => 'POST',
+            'header'  => "Content-Type: application/json\r\n",
+            'content' => $payload,
+            'timeout' => 5,
+            'ignore_errors' => true,
+        ],
+    ]);
+    $resp = @file_get_contents('https://tally-license.nscilingo.workers.dev/api/register', false, $ctx);
+    if ($resp === false) return false; // network error -- caller keeps prior state
+    $data = json_decode($resp, true);
+    return is_array($data) && !empty($data['registered']);
+}
+
+$regEmailInput = trim($_POST["reg_email"] ?? "");
+$regLicenseKeyInput = s($_POST["reg_license_key"] ?? null, $cfg["registration"]["license_key"] ?? "");
+$priorRegistered = !empty($cfg["registration"]["registered"]);
+
+if ($regEmailInput === '') {
+    // Cleared the email field -- treat as explicitly un-registering rather
+    // than leaving a stale "registered: true" with no email on record.
+    $registered = false;
+} else {
+    $serverResult = tally_register($regEmailInput, $regLicenseKeyInput);
+    // A network failure (server unreachable) must not silently flip an
+    // already-registered install back to unregistered -- keep the prior
+    // state in that case rather than treating "couldn't reach the server"
+    // the same as "the server said no."
+    $registered = ($serverResult === false) ? $priorRegistered : $serverResult;
+}
+
 $cfg["registration"] = [
-    "email"       => s($_POST["reg_email"] ?? null, $cfg["registration"]["email"] ?? ""),
-    "license_key" => s($_POST["reg_license_key"] ?? null, $cfg["registration"]["license_key"] ?? ""),
-    // Local-only stub for now: any non-empty email is treated as registered.
-    // The real fpp-tally-license-server integration replaces this check
-    // without touching the rest of the Setup page (see docs/configuration
-    // notes in README for the planned wiring).
-    "registered"  => (trim($_POST["reg_email"] ?? "") !== ""),
+    "email"       => $regEmailInput,
+    "license_key" => $regLicenseKeyInput,
+    "registered"  => $registered,
 ];
 
 // ── Zones (direction labels are free text — see project spec section 3) ──
