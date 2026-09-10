@@ -40,6 +40,7 @@ $cfg["modules"] = [
     "crowd_ble"  => b($_POST["mod_crowd_ble"] ?? null),
     "crowd_wifi" => b($_POST["mod_crowd_wifi"] ?? null),
     "bme280"     => b($_POST["mod_bme280"] ?? null),
+    "dht11"      => b($_POST["mod_dht11"] ?? null),
 ];
 
 // ── Registration (soft gate on the web UI only — see tally_config.py) ────
@@ -161,6 +162,14 @@ $cfg["bme280"] = [
     "i2c_address"     => s($_POST["bme280_i2c_address"] ?? null, "0x76"),
     "poll_interval_s" => i($_POST["bme280_poll_interval_s"] ?? null, 600),
     "display_unit"    => (($_POST["bme280_display_unit"] ?? "F") === "C") ? "C" : "F",
+];
+
+// ── DHT11 config (not in the original spec -- added because DHT11 is the
+// sensor actually available to test against; see dht11.py's docstring) ──
+$cfg["dht11"] = [
+    "pin"          => i($_POST["dht11_pin"] ?? null, 4),
+    "interval_s"   => i($_POST["dht11_interval_s"] ?? null, 60),
+    "display_unit" => (($_POST["dht11_display_unit"] ?? "F") === "C") ? "C" : "F",
 ];
 
 // ── FPP Triggers ────────────────────────────────────────────────────

@@ -68,6 +68,7 @@ $ld   = $cfg['ld2410'] ?? [];
 $th   = $cfg['thermal'] ?? [];
 $cs   = $cfg['crowd_scan'] ?? [];
 $bme  = $cfg['bme280'] ?? [];
+$dht  = $cfg['dht11'] ?? [];
 $trig = $cfg['triggers'] ?? [];
 $mqtt = $cfg['mqtt'] ?? [];
 ?>
@@ -176,6 +177,13 @@ $mqtt = $cfg['mqtt'] ?? [];
     <label class="form-check-label" for="modBme280">
       BME280 temperature/humidity (Option 4)
       <span class="badge bg-danger">not yet hardware-validated</span>
+    </label>
+  </div>
+  <div class="form-check form-switch">
+    <input class="form-check-input" type="checkbox" name="mod_dht11" id="modDht11" value="1"
+           <?= !empty($mods['dht11']) ? 'checked' : '' ?> onchange="tallyToggleSection('dht11', this.checked)">
+    <label class="form-check-label" for="modDht11">
+      DHT11 temperature/humidity (not in the original spec — added for the sensor actually on hand)
     </label>
   </div>
 </div>
@@ -374,6 +382,32 @@ $mqtt = $cfg['mqtt'] ?? [];
       <select class="form-control" name="bme280_display_unit">
         <option value="F" <?= ($bme['display_unit'] ?? 'F') === 'F' ? 'selected' : '' ?>>°F</option>
         <option value="C" <?= ($bme['display_unit'] ?? '') === 'C' ? 'selected' : '' ?>>°C</option>
+      </select>
+    </div>
+  </div>
+</div>
+
+<div class="tally-card" id="section-dht11" <?= empty($mods['dht11']) ? 'style="display:none;"' : '' ?>>
+  <h4><i class="fas fa-fw fa-cloud-sun"></i> DHT11 Config</h4>
+  <p class="text-muted small">
+    Not part of the original project spec (which calls for a BME280 over I2C) — added
+    because DHT11 is the sensor actually available to test against. Single-wire digital
+    protocol, not I2C, even if wired to a header pin labeled for an I2C function.
+  </p>
+  <div class="row g-2">
+    <div class="col-md-4">
+      <label class="form-label">GPIO pin (BCM number)</label>
+      <input type="number" class="form-control" name="dht11_pin" value="<?= e($dht['pin'] ?? 4) ?>">
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Poll interval (seconds)</label>
+      <input type="number" class="form-control" name="dht11_interval_s" value="<?= e($dht['interval_s'] ?? 60) ?>">
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Display unit</label>
+      <select class="form-control" name="dht11_display_unit">
+        <option value="F" <?= ($dht['display_unit'] ?? 'F') === 'F' ? 'selected' : '' ?>>°F</option>
+        <option value="C" <?= ($dht['display_unit'] ?? '') === 'C' ? 'selected' : '' ?>>°C</option>
       </select>
     </div>
   </div>

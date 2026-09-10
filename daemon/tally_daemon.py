@@ -39,6 +39,7 @@ from modules.thermal import ThermalModule
 from modules.crowd_ble import CrowdBLEModule
 from modules.crowd_wifi import CrowdWiFiModule
 from modules.bme280 import BME280Module
+from modules.dht11 import DHT11Module
 
 _LOGDIR = os.environ.get("LOGDIR", "/home/fpp/media/logs")
 LOG_FILE = os.path.join(_LOGDIR, "plugin-fpp-tally.log")
@@ -72,6 +73,7 @@ MODULE_CLASSES = {
     "crowd_ble": CrowdBLEModule,
     "crowd_wifi": CrowdWiFiModule,
     "bme280": BME280Module,
+    "dht11": DHT11Module,
 }
 
 _shutdown = threading.Event()
@@ -219,7 +221,7 @@ def main() -> None:
             _publish_zone_counts(db, ha, cfg, zone_name)
     if mods_enabled.get("crowd_ble") or mods_enabled.get("crowd_wifi"):
         ha.setup_crowd_discovery()
-    if mods_enabled.get("bme280"):
+    if mods_enabled.get("bme280") or mods_enabled.get("dht11"):
         ha.setup_environment_discovery()
 
     event_queue: "queue.Queue[dict]" = queue.Queue(maxsize=1000)

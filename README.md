@@ -14,6 +14,7 @@ FPP playlists/effects live in response to traffic.
 | 3a | Onboard Bluetooth (BLE crowd/device estimate) | ✅ Working |
 | 3b | Second USB WiFi adapter (monitor-mode crowd estimate) | ⚠️ Implemented, needs elevated daemon privileges — see below |
 | 4 | BME280 temperature/humidity | ⚠️ Implemented, not yet hardware-validated |
+| 4b | DHT11 temperature/humidity *(not in the original spec)* | ⚠️ Implemented, not yet hardware-validated |
 
 Options 1 and 2 are not mutually exclusive — run either alone, or both for a
 full entrance+driveway picture. Every module is independently enabled from
@@ -109,11 +110,36 @@ monitor`) before starting the daemon; Tally doesn't do this for you.
   per-reading error recovery are unit-tested against a fake sensor object.
 
 Every module described in the project spec (LD2410B, thermal, BLE, WiFi,
-BME280) is now implemented. What's left before a 1.0: hardware validation
-of thermal/BME280/WiFi against real sensors, the registration/licensing
-backend (`fpp-tally-license-server`), the hidden calibration route's
-actual camera-frame capture, and the Reporting page's 7/30/90/365-day
-chart views.
+BME280) is now implemented.
+
+## What's new in v0.5.0
+
+- **Registration wired to a real license server** —
+  [fpp-tally-license-server](https://github.com/focusedonsound/fpp-tally-license-server)
+  (Cloudflare Worker + D1) replaces the local-only registration stub.
+- **Calibration route: camera-frame capture implemented** — ffmpeg + V4L2,
+  works with a generic USB webcam.
+- **Reporting page: full chart views** — per-zone stacked traffic
+  (direction A/B + parked) with 7/30/90/365-day range selection, hourly
+  distribution, and crowd/environment charts.
+- Fixed a real bug found via testing: the hourly-distribution chart was
+  silently bucketing by UTC instead of local time.
+
+## DHT11 module added (not in the original spec)
+
+The project spec calls for a BME280 (I2C), but DHT11 (single-wire digital,
+same sensor `fpp-sled-mailbox` already supports) is what's actually
+available to test against on real hardware — see `daemon/modules/dht11.py`.
+Same `environment` event kind and DB table as BME280; enable whichever one
+matches your actual sensor. Not yet validated against a real DHT11 — the
+°C→°F conversion and the poll loop's checksum-failure recovery (DHT11
+reads regularly fail transiently; that's normal for the protocol, not a
+fault condition) are unit-tested against a fake sensor object.
+
+What's left before a 1.0: hardware validation of thermal/BME280/DHT11/WiFi
+against real sensors, and the hidden calibration route's real-camera
+validation (currently only tested against the capture-failure path, no
+camera connected yet).
 
 ## Installation
 

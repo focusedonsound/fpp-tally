@@ -64,6 +64,7 @@ if python3 -m pip --version >/dev/null 2>&1; then
     log "Installing optional sensor-module Python libraries..."
     python3 -m pip install --quiet --break-system-packages \
         bleak scapy adafruit-circuitpython-mlx90640 adafruit-circuitpython-bme280 \
+        adafruit-circuitpython-dht \
         >> "$LOGFILE" 2>&1 \
         || log "WARN: one or more optional libraries failed to install (non-fatal — that module stays disabled until resolved)"
 fi
