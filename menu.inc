@@ -12,7 +12,7 @@ $menuEntries = Array(
 	),
 	Array(
 		'text' => 'Tally Reporting',
-		'type' => 'content',
+		'type' => 'status',
 		'page' => 'www/reporting.php',
 		'wrap' => 1
 	)
