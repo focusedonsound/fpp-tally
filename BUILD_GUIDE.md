@@ -6,10 +6,12 @@ step, and vice versa for **Option 2 only** (thermal). No real photos are
 included yet — sections that should eventually show the builder's own
 photos are marked `[PHOTO PLACEHOLDER]`.
 
-> ⚠️ Everything in this guide involving the MLX90640 thermal array reflects
-> the *intended* design (project spec section 8) — the software side isn't
-> implemented yet (see README.md's roadmap). Wire it up if you have the
-> hardware, but don't expect detection events until a later release.
+> ⚠️ The MLX90640 thermal module's detection logic is implemented (blob
+> detection, direction, parked dwell, speed estimate) but has not yet been
+> validated against real hardware — no thermal sensor has been available
+> during development. Wire it up, but expect to tune the blob-threshold
+> and min-travel-column settings once you can see real detections, not
+> plug-and-play accuracy on day one.
 
 ## 1. Parts list
 

@@ -152,7 +152,7 @@ $mqtt = $cfg['mqtt'] ?? [];
            <?= !empty($mods['thermal']) ? 'checked' : '' ?> onchange="tallyToggleSection('thermal', this.checked)">
     <label class="form-check-label" for="modThermal">
       MLX90640 thermal array (Option 2 — entrance/street zone)
-      <span class="badge bg-warning text-dark">not yet implemented</span>
+      <span class="badge bg-danger">not yet hardware-validated</span>
     </label>
   </div>
   <div class="form-check form-switch">
@@ -241,12 +241,14 @@ $mqtt = $cfg['mqtt'] ?? [];
   </div>
 </div>
 
-<div class="tally-card tally-hw-disabled" id="section-thermal" <?= empty($mods['thermal']) ? 'style="display:none;"' : '' ?>>
+<div class="tally-card" id="section-thermal" <?= empty($mods['thermal']) ? 'style="display:none;"' : '' ?>>
   <h4><i class="fas fa-fw fa-temperature-high"></i> Thermal Config — Entrance Zone
-    <span class="badge bg-warning text-dark">not yet implemented</span>
+    <span class="badge bg-danger">not yet hardware-validated</span>
   </h4>
   <p class="text-muted small">
-    Fields save now so your mounting geometry is captured for when the blob-detection module ships.
+    Detection logic (blob tracking, direction, parked dwell, speed estimate) is implemented,
+    but has not been tested against a real MLX90640 — treat the thresholds below as a starting
+    point to tune once you have the sensor wired up, not as pre-calibrated values.
   </p>
   <div class="row g-2">
     <div class="col-md-6">
@@ -274,8 +276,22 @@ $mqtt = $cfg['mqtt'] ?? [];
       <input type="number" class="form-control" name="thermal_frame_rate_hz" value="<?= e($th['frame_rate_hz'] ?? 4) ?>">
     </div>
     <div class="col-md-3">
-      <label class="form-label">Min blob size</label>
+      <label class="form-label">Min blob size (px)</label>
       <input type="number" class="form-control" name="thermal_min_blob_size" value="<?= e($th['min_blob_size'] ?? 6) ?>">
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Blob threshold (°C above background)</label>
+      <input type="number" step="0.1" class="form-control" name="thermal_delta_threshold_c" value="<?= e($th['delta_threshold_c'] ?? 2.0) ?>">
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Min travel to count as a pass (columns)</label>
+      <input type="number" step="1" class="form-control" name="thermal_min_travel_cols" value="<?= e($th['min_travel_cols'] ?? 4) ?>">
+    </div>
+    <div class="col-md-4 d-flex align-items-end">
+      <div class="form-check form-switch">
+        <input class="form-check-input" type="checkbox" name="thermal_flip_direction" value="1" <?= !empty($th['flip_direction']) ? 'checked' : '' ?>>
+        <label class="form-check-label">Flip direction (swap A/B without re-mounting)</label>
+      </div>
     </div>
     <div class="col-md-4">
       <label class="form-label">Mount height (m)</label>

@@ -10,7 +10,7 @@ FPP playlists/effects live in response to traffic.
 | Option | Hardware | Status |
 |---|---|---|
 | 1 | 2× HLK-LD2410B radar (driveway/zone) | ✅ Working |
-| 2 | MLX90640 thermal array (entrance/street zone) | 🚧 Scaffolded, not yet implemented |
+| 2 | MLX90640 thermal array (entrance/street zone) | ⚠️ Implemented, not yet hardware-validated |
 | 3a | Onboard Bluetooth (BLE crowd/device estimate) | 🚧 Scaffolded, not yet implemented |
 | 3b | Second USB WiFi adapter (monitor-mode crowd estimate) | 🚧 Scaffolded, not yet implemented |
 | 4 | BME280 temperature/humidity | 🚧 Scaffolded, not yet implemented |
@@ -41,10 +41,25 @@ never blocks the others.
   (activation/expiry/audit-log gating implemented; the camera-frame preview
   itself is not — no camera integration yet)
 
-Thermal, BLE, WiFi, and BME280 modules are present in the codebase (same
-interface as LD2410B, selectable in the wizard) but their `run()` methods
-currently just log a warning and idle — they do not fabricate data. Each
-ships as its own follow-up release.
+## What's new in v0.2.0
+
+- **Thermal (MLX90640) module implemented** — frame differencing / blob
+  detection on the 32×24 grid, centroid tracking, edge-crossing direction
+  classification, parked-dwell detection (whose eventual departure still
+  logs a normal directional pass, per spec), and a best-effort geometric
+  speed estimate from your configured mount height/angle/distance.
+  Unit-tested against synthetic frames (blob detection, background
+  subtraction, direction, parked-then-departure, speed estimate, and
+  graceful idling when the sensor library isn't installed) — **but not yet
+  validated against a real MLX90640**, since no thermal sensor has been
+  available during development. Treat the blob-threshold and
+  min-travel-columns defaults as a starting point to tune once you have
+  the hardware wired up.
+
+BLE, WiFi, and BME280 modules are still present in the codebase (same
+interface as LD2410B/thermal, selectable in the wizard) but their `run()`
+methods currently just log a warning and idle — they do not fabricate
+data. Each ships as its own follow-up release.
 
 ## Installation
 
