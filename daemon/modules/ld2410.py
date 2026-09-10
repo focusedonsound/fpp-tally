@@ -92,9 +92,17 @@ class _ParkedState:
         self._parked = False
 
     def on_presence(self, now: float) -> None:
+        # Only starts a new episode (sets _since) if one wasn't already
+        # running -- must NOT touch _parked here. This is called on every
+        # poll iteration where the radar reports presence, not just on the
+        # rising edge, so unconditionally resetting _parked to False here
+        # immediately un-arms the "already fired" latch check_parked() just
+        # set, on the very next iteration -- confirmed on real hardware:
+        # produced a fresh "parked" event roughly every poll cycle for the
+        # entire remainder of a car sitting still, instead of exactly once.
+        # Only on_absence() (presence genuinely ending) may reset _parked.
         if self._since is None:
             self._since = now
-        self._parked = False
 
     def on_absence(self) -> None:
         self._since = None
