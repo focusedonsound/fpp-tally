@@ -111,7 +111,7 @@ try {
         }
     }
 
-    if (!empty($modules['bme280'])) {
+    if (!empty($modules['bme280']) || !empty($modules['dht11'])) {
         $row = $db->querySingle(
             "SELECT temperature_f, humidity_pct, timestamp FROM environment ORDER BY id DESC LIMIT 1", true
         );

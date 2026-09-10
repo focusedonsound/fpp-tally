@@ -121,9 +121,11 @@ try {
         $result['crowd'] = ['labels' => $ts, 'data' => $vals];
     }
 
-    // Environment (temperature/humidity) over time, if BME280 enabled --
-    // shown alongside the traffic charts for correlation, per spec.
-    if (!empty($modules['bme280'])) {
+    // Environment (temperature/humidity) over time, if BME280 or DHT11 is
+    // enabled -- both log to the same environment table (see
+    // tally_daemon.py's _handle_environment_event()), shown alongside the
+    // traffic charts for correlation, per spec.
+    if (!empty($modules['bme280']) || !empty($modules['dht11'])) {
         $stmt = $db->prepare(
             "SELECT timestamp, temperature_f, humidity_pct FROM environment
              WHERE timestamp >= datetime('now', :range) ORDER BY id ASC"
