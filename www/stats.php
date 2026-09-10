@@ -94,7 +94,7 @@ try {
     for ($h = 0; $h < 24; $h++) $hourly[sprintf('%02d', $h)] = 0;
     if (!empty($result['zones'])) {
         $stmt = $db->prepare(
-            "SELECT strftime('%H', timestamp) AS hr, COUNT(*) AS n FROM events
+            "SELECT strftime('%H', timestamp, 'localtime') AS hr, COUNT(*) AS n FROM events
              WHERE event_type = 'pass' AND timestamp >= datetime('now', :range) GROUP BY hr"
         );
         $stmt->bindValue(':range', "-{$days} days", SQLITE3_TEXT);

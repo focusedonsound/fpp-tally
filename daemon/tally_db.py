@@ -163,9 +163,18 @@ class TallyDB:
         return [dict(r) for r in cur.fetchall()]
 
     def hourly_distribution(self, days: int = 30, zone: Optional[str] = None) -> Dict[str, int]:
-        """Vehicle pass counts bucketed by hour-of-day (0-23) over the last N days."""
+        """Vehicle pass counts bucketed by hour-of-day (0-23) over the last N days.
+
+        Events are stored as ISO8601 with an explicit local UTC offset
+        (see _now_iso()); SQLite's date functions normalize that to UTC
+        internally before formatting, so a bare strftime('%H', ...) here
+        would silently bucket by UTC hour instead of the Pi's actual local
+        hour -- exactly backwards for a "what time of day do vehicles pass"
+        report. The 'localtime' modifier converts back to this machine's
+        local timezone before extracting the hour.
+        """
         sql = (
-            "SELECT strftime('%H', timestamp) AS hr, COUNT(*) AS n FROM events "
+            "SELECT strftime('%H', timestamp, 'localtime') AS hr, COUNT(*) AS n FROM events "
             "WHERE event_type='pass' AND timestamp >= datetime('now', ?)"
         )
         params: List[Any] = [f"-{int(days)} days"]
