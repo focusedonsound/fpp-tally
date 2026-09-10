@@ -26,10 +26,15 @@ Event dict shape (put onto the queue):
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
 import queue
 import threading
+import time
 from typing import Any, Dict
+
+_STATE_DIR = "/home/fpp/media/plugins/fpp-tally/state"
 
 
 class SensorModule:
@@ -69,3 +74,25 @@ class SensorModule:
             self.events.put_nowait(fields)
         except queue.Full:
             self.log.warning("event queue full — dropping event")
+
+    def _write_live_state(self, filename: str, payload: Dict[str, Any]) -> None:
+        """Atomically write ephemeral live-diagnostics state for the
+        Diagnostics page to poll -- e.g. raw BLE/WiFi addresses from the
+        most recent scan, or (ld2410.py, which has its own richer version
+        of this same idea) per-gate radar energy. Overwritten every call,
+        never appended to the permanent events/device_scans history:
+        MAC-ish identifiers are semi-sensitive, and there's no reason to
+        build a standing log of them just to support a live readout.
+        Failures are swallowed (debug-logged) -- a diagnostics-only write
+        must never be able to take down the module's actual scan loop."""
+        payload = dict(payload)
+        payload.setdefault("updated_at", time.time())
+        try:
+            os.makedirs(_STATE_DIR, exist_ok=True)
+            path = os.path.join(_STATE_DIR, filename)
+            tmp = path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(payload, f)
+            os.replace(tmp, path)
+        except Exception as exc:
+            self.log.debug("live-state write failed (%s): %s", filename, exc)

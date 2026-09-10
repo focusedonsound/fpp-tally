@@ -33,12 +33,12 @@ except ImportError:
     BleakScanner = None  # type: ignore
 
 
-async def _scan_once(timeout_s: float) -> int:
-    """One BLE discovery pass. Returns the count of unique addresses seen.
-    Split out as its own coroutine so it's independently testable without
-    running the module's full thread loop."""
+async def _scan_once(timeout_s: float) -> list:
+    """One BLE discovery pass. Returns the sorted list of unique addresses
+    seen. Split out as its own coroutine so it's independently testable
+    without running the module's full thread loop."""
     devices = await BleakScanner.discover(timeout=timeout_s)
-    return len({d.address for d in devices})
+    return sorted({d.address for d in devices})
 
 
 class CrowdBLEModule(SensorModule):
@@ -67,9 +67,15 @@ class CrowdBLEModule(SensorModule):
 
         while not self._stop.is_set():
             try:
-                raw_count = asyncio.run(_scan_once(scan_timeout_s))
-                self._emit(kind="scan", source="ble", raw_count=raw_count)
-                self.log.debug("[BLE] scan: %d unique addresses", raw_count)
+                addresses = asyncio.run(_scan_once(scan_timeout_s))
+                self._emit(kind="scan", source="ble", raw_count=len(addresses))
+                # Diagnostics-only, never persisted to the DB history --
+                # see _write_live_state()'s docstring for why.
+                self._write_live_state("crowd_ble_live.json", {
+                    "addresses": addresses,
+                    "count": len(addresses),
+                })
+                self.log.debug("[BLE] scan: %d unique addresses", len(addresses))
             except Exception as exc:
                 # Covers "no Bluetooth adapter", permission errors, and any
                 # transient bleak/dbus hiccup -- one bad scan must not stop

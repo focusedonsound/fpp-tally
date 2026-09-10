@@ -1,10 +1,19 @@
 """
 crowd_wifi.py — Tally's WiFi crowd/device-estimate module (Option 3b).
 
-Passive 802.11 probe-request sniffing via a second USB adapter in monitor
-mode — no association, no content capture, same sampling approach as
-crowd_ble.py (count unique source MAC addresses seen in a scan window,
-hand the raw count to the daemon for offset/floor).
+Passive 802.11 probe-request sniffing in monitor mode — no association, no
+content capture, same sampling approach as crowd_ble.py (count unique
+source MAC addresses seen in a scan window, hand the raw count to the
+daemon for offset/floor).
+
+Defaults to the Pi's onboard adapter (wlan0) rather than assuming a
+second USB adapter is always required — plenty of fixed show-prop
+installs reach their own network over Ethernet, leaving wlan0 sitting
+completely idle (confirmed on real hardware: 192.168.0.51 is Ethernet-
+connected with wlan0 down/unused). If the Pi actually uses WiFi for its
+own network connection, monitor mode on that same interface would drop
+it, so a builder in that situation needs a second USB adapter and must
+configure its interface name here instead.
 
 Requirements this module cannot fully self-provision:
   - The configured interface must actually support monitor mode. Known
@@ -39,8 +48,8 @@ except ImportError:
     Dot11ProbeReq = None  # type: ignore
 
 
-def _count_unique_probe_sources(iface: str, timeout_s: float, sniff_fn=None) -> int:
-    """One sniff pass. Returns the count of unique addr2 (source MAC)
+def _unique_probe_sources(iface: str, timeout_s: float, sniff_fn=None) -> list:
+    """One sniff pass. Returns the sorted list of unique addr2 (source MAC)
     values seen across Dot11ProbeReq frames. sniff_fn is injectable so this
     is testable without a real interface/scapy sniff() call."""
     sniff_fn = sniff_fn or sniff
@@ -51,7 +60,7 @@ def _count_unique_probe_sources(iface: str, timeout_s: float, sniff_fn=None) -> 
             seen.add(pkt.addr2)
 
     sniff_fn(iface=iface, prn=_handle, timeout=timeout_s, store=False)
-    return len(seen)
+    return sorted(seen)
 
 
 class CrowdWiFiModule(SensorModule):
@@ -68,7 +77,16 @@ class CrowdWiFiModule(SensorModule):
             return
 
         cs_cfg = self.cfg.get("crowd_scan", {}) or {}
-        interface = cs_cfg.get("wifi_interface", "wlan1")
+        # Defaults to the onboard adapter -- fine when the Pi reaches its
+        # own network over Ethernet (or isn't networked at all) and wlan0
+        # would otherwise sit idle, which is the common case for a fixed
+        # show-prop install. If the Pi actually uses WiFi for its own
+        # network connection, the builder needs a second USB adapter here
+        # instead -- monitor mode on the interface the Pi is associated
+        # through would drop its own connection. Not auto-detected (see
+        # www/index.php's Crowd Scan Config card for the warning copy);
+        # network state can change after any check this module could do.
+        interface = cs_cfg.get("wifi_interface", "wlan0")
         interval_s = max(10, int(cs_cfg.get("interval_s", 60)))
         scan_timeout_s = min(10.0, interval_s / 2.0)
 
@@ -82,9 +100,13 @@ class CrowdWiFiModule(SensorModule):
 
         while not self._stop.is_set():
             try:
-                raw_count = _count_unique_probe_sources(interface, scan_timeout_s)
-                self._emit(kind="scan", source="wifi", raw_count=raw_count)
-                self.log.debug("[WiFi] scan: %d unique probe-request sources", raw_count)
+                addresses = _unique_probe_sources(interface, scan_timeout_s)
+                self._emit(kind="scan", source="wifi", raw_count=len(addresses))
+                self._write_live_state("crowd_wifi_live.json", {
+                    "addresses": addresses,
+                    "count": len(addresses),
+                })
+                self.log.debug("[WiFi] scan: %d unique probe-request sources", len(addresses))
                 probed = True
             except PermissionError as exc:
                 self.log.error(

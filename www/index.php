@@ -112,6 +112,9 @@ $mqtt = $cfg['mqtt'] ?? [];
   <a class="tally-btn tally-btn-secondary" href="plugin.php?plugin=fpp-tally&page=www/reporting.php">
     <i class="fas fa-chart-line"></i> Open Reporting
   </a>
+  <a class="tally-btn tally-btn-secondary" href="plugin.php?plugin=fpp-tally&page=www/diagnostics.php">
+    <i class="fas fa-satellite-dish"></i> Open Diagnostics
+  </a>
 </div>
 
 <form id="tallyForm">
@@ -335,10 +338,18 @@ $mqtt = $cfg['mqtt'] ?? [];
     the combined estimate (their identifiers can't be reliably deduplicated against each other,
     so summing them would double-count devices seen on both radios).
   </p>
+  <p class="text-muted small">
+    <strong>⚠️ WiFi interface:</strong> defaults to the Pi's onboard adapter
+    (<code>wlan0</code>). That's only safe if this Pi reaches <em>its own</em> network over
+    Ethernet (or isn't networked at all) — putting wlan0 into monitor mode while it's your
+    active WiFi connection will drop that connection. If this Pi connects to your network over
+    WiFi, plug in a separate USB WiFi adapter for scanning and enter its interface name below
+    instead (commonly <code>wlan1</code>).
+  </p>
   <div class="row g-2">
     <div class="col-md-4">
       <label class="form-label">WiFi monitor-mode interface</label>
-      <input type="text" class="form-control" name="crowd_wifi_interface" value="<?= e($cs['wifi_interface'] ?? 'wlan1') ?>">
+      <input type="text" class="form-control" name="crowd_wifi_interface" value="<?= e($cs['wifi_interface'] ?? 'wlan0') ?>">
     </div>
     <div class="col-md-4">
       <label class="form-label">Scan interval (seconds)</label>

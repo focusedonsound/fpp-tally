@@ -13,9 +13,20 @@ being watched. Which one fires first determines direction: A-then-B is one
 direction, B-then-A is the other. A car that lingers past parked_timeout_s
 on a real target is logged as "parked" instead of "pass", and further pass
 events are suppressed for that unit until it actually clears.
+
+Runs each radar in engineering mode from the moment it connects (a
+superset of basic mode — same presence/distance/energy fields the
+direction/parked logic already used, plus per-gate energy arrays) so the
+Diagnostics page can show exactly what each sensor is currently seeing,
+without needing a runtime mode-switch. If putting a unit into engineering
+mode fails, it keeps running in basic mode (decode_report_frame fallback)
+— direction/parked detection is unaffected either way; only the
+Diagnostics page's per-gate detail is unavailable for that unit.
 """
 from __future__ import annotations
 
+import json
+import os
 import time
 from typing import Optional
 
@@ -29,9 +40,13 @@ except ImportError:
     SERIAL_AVAILABLE = False
     serial = None  # type: ignore
 
+_STATE_DIR = "/home/fpp/media/plugins/fpp-tally/state"
+LIVE_STATE_FILE = os.path.join(_STATE_DIR, "ld2410_live.json")
+
 
 class _RadarReader:
-    """Owns one LD2410B's serial port and presence state."""
+    """Owns one LD2410B's serial port, presence state, and the latest
+    decoded report (basic or engineering) for live diagnostics."""
 
     def __init__(self, side: str, port: str, min_energy: int, log) -> None:
         self.side = side
@@ -40,6 +55,9 @@ class _RadarReader:
         self.log = log
         self._ser = None
         self._buf = bytearray()
+        self.engineering = False
+        self.last_report = None  # proto.Ld2410Report | proto.Ld2410EngReport | None
+        self.last_report_ts = 0.0
 
     def open(self) -> bool:
         if not SERIAL_AVAILABLE:
@@ -48,9 +66,29 @@ class _RadarReader:
         try:
             self._ser = serial.Serial(self.port, baudrate=256000, timeout=0.1)
             self.log.info("LD2410B %s opened on %s", self.side, self.port)
-            return True
         except Exception as exc:
             self.log.warning("LD2410B %s: could not open %s: %s", self.side, self.port, exc)
+            return False
+
+        self.engineering = self._enable_engineering_mode()
+        if self.engineering:
+            self.log.info("LD2410B %s: engineering mode enabled (per-gate diagnostics available)", self.side)
+        else:
+            self.log.info("LD2410B %s: running in basic mode (engineering mode unavailable — "
+                           "Diagnostics page will show presence/distance/energy only, no per-gate detail)",
+                           self.side)
+        return True
+
+    def _enable_engineering_mode(self) -> bool:
+        try:
+            if not proto.ld2410_enter_config(self._ser):
+                return False
+            ok = proto.ld2410_enable_eng(self._ser)
+            proto.ld2410_exit_config(self._ser)
+            self._ser.reset_input_buffer()
+            return ok
+        except Exception as exc:
+            self.log.debug("LD2410B %s: engineering-mode setup failed: %s", self.side, exc)
             return False
 
     def close(self) -> None:
@@ -61,7 +99,11 @@ class _RadarReader:
                 pass
 
     def poll_present(self) -> Optional[bool]:
-        """Returns True/False if a fresh report was decoded, None if no new data."""
+        """Returns True/False if a fresh report was decoded, None if no new
+        data. Also updates self.last_report for the live-diagnostics writer,
+        preferring an engineering-mode decode and falling back to the basic
+        decoder (same fallback SLED's own daemon uses) since not every
+        frame necessarily carries engineering data even once enabled."""
         if self._ser is None:
             return None
         try:
@@ -75,10 +117,16 @@ class _RadarReader:
 
         present: Optional[bool] = None
         for frame in proto.extract_report_frames(self._buf):
-            report = proto.decode_report_frame(frame)
+            report = proto.decode_eng_frame(frame) or proto.decode_report_frame(frame)
             if report is None:
                 continue
-            energy = max(report.move_energy, report.still_energy)
+            self.last_report = report
+            self.last_report_ts = time.time()
+            move_e = report.move_energy
+            still_e = getattr(report, "still_energy", None)
+            if still_e is None:
+                still_e = getattr(report, "static_energy", 0)
+            energy = max(move_e, still_e)
             present = report.present and energy >= self.min_energy
         return present
 
@@ -125,6 +173,46 @@ class _ParkedState:
         return not self._parked
 
 
+def _report_to_dict(reader: _RadarReader) -> dict:
+    r = reader.last_report
+    stale = (time.time() - reader.last_report_ts) > 3.0 if reader.last_report_ts else True
+    base = {
+        "connected": reader._ser is not None,
+        "engineering": reader.engineering,
+        "stale": stale,
+        "port": reader.port,
+    }
+    if r is None:
+        return {**base, "present": None}
+    base["present"] = r.present
+    base["target_status"] = r.target_status
+    if isinstance(r, proto.Ld2410EngReport):
+        base.update({
+            "move_dist_cm": r.move_dist_cm,
+            "move_energy": r.move_energy,
+            "static_dist_cm": r.static_dist_cm,
+            "static_energy": r.static_energy,
+            "detect_dist_cm": r.detect_dist_cm,
+            "max_move_gate": r.max_move_gate,
+            "max_static_gate": r.max_static_gate,
+            "gate_move_energy": r.gate_move_energy,
+            "gate_static_energy": r.gate_static_energy,
+        })
+    else:
+        base.update({
+            "move_dist_cm": r.move_dist_cm,
+            "move_energy": r.move_energy,
+            "static_dist_cm": r.still_dist_cm,
+            "static_energy": r.still_energy,
+            "detect_dist_cm": r.detect_dist_cm,
+            "max_move_gate": None,
+            "max_static_gate": None,
+            "gate_move_energy": None,
+            "gate_static_energy": None,
+        })
+    return base
+
+
 class LD2410Module(SensorModule):
     name = "ld2410"
 
@@ -163,6 +251,7 @@ class LD2410Module(SensorModule):
         t_last = {"A": None, "B": None}
         cooldown_s = 1.5
         last_pass_ts = 0.0
+        last_live_write = 0.0
 
         self.log.info("LD2410B module running: zone=%s A=%s B=%s", zone, ok_a, ok_b)
 
@@ -208,7 +297,32 @@ class LD2410Module(SensorModule):
 
                 was_present[side] = bool(present)
 
+            # Live-diagnostics state, throttled — this is ephemeral working
+            # state for the Diagnostics page to poll, overwritten every
+            # cycle, never appended to the permanent events history.
+            if (now - last_live_write) >= 0.5:
+                last_live_write = now
+                try:
+                    os.makedirs(_STATE_DIR, exist_ok=True)
+                    payload = {
+                        "zone": zone,
+                        "updated_at": now,
+                        "A": _report_to_dict(reader_a),
+                        "B": _report_to_dict(reader_b),
+                    }
+                    tmp = LIVE_STATE_FILE + ".tmp"
+                    with open(tmp, "w") as f:
+                        json.dump(payload, f)
+                    os.replace(tmp, LIVE_STATE_FILE)
+                except Exception as exc:
+                    self.log.debug("live-state write failed: %s", exc)
+
             time.sleep(0.05)
 
         reader_a.close()
         reader_b.close()
+        # Deliberately NOT deleted here -- the Diagnostics page already
+        # treats the report as stale once last_report_ts is more than 3s
+        # old (see _report_to_dict), which correctly communicates "no
+        # longer live" without needing a race between this cleanup and
+        # whatever the page happens to be polling at that exact moment.

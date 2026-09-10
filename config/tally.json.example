@@ -53,7 +53,7 @@
   "crowd_scan": {
     "ble_enabled": true,
     "wifi_enabled": false,
-    "wifi_interface": "wlan1",
+    "wifi_interface": "wlan0",
     "interval_s": 60,
     "device_offset": 0,
     "crowd_threshold": 0

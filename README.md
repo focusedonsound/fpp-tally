@@ -80,6 +80,16 @@ never blocks the others.
 
 ### Enabling WiFi crowd scanning
 
+The Setup page's Crowd Scan Config card defaults the WiFi interface to
+`wlan0` — the Pi's onboard adapter. That's only safe if this Pi reaches
+*its own* network some other way (Ethernet, or no network at all);
+putting wlan0 into monitor mode while it's your active WiFi connection
+will drop that connection. If this Pi is on WiFi for its own network,
+plug in a second USB WiFi adapter for scanning and set its interface
+name (commonly `wlan1`) on the Setup page instead. Not auto-detected —
+network state can change after any check Tally could do at startup, so
+this is a decision left to the builder.
+
 `tally.service` runs the daemon as the unprivileged `fpp` user (matching
 the rest of Tally, and FPP's own plugin conventions). Raw 802.11 frame
 capture needs elevated privileges, which this build does not request on
@@ -95,8 +105,9 @@ sudo setcap cap_net_raw,cap_net_admin=eip /usr/bin/python3.XX
 be aware this grants that capability to *every* script run by that
 interpreter, not just Tally's daemon — evaluate the tradeoff for your
 system before doing this). You'll also need to put the configured
-interface into monitor mode yourself (`sudo iw dev wlan1 set type
-monitor`) before starting the daemon; Tally doesn't do this for you.
+interface into monitor mode yourself (`sudo iw dev wlan0 set type
+monitor`, or `wlan1` etc. if you're using a second adapter) before
+starting the daemon; Tally doesn't do this for you.
 
 ## What's new in v0.4.0
 
@@ -181,6 +192,34 @@ What's left before a 1.0: hardware validation of thermal/BME280/WiFi
 crowd-scan against real sensors (no MLX90640, no second monitor-mode WiFi
 adapter available during this pass), and the registration/licensing
 backend's premium-tier logic once that's actually defined.
+
+## What's new in v0.7.0 — Diagnostics page
+
+- **New Diagnostics page** (linked from Setup, not part of the main nav) —
+  a live-only view, polled every second, never written to the database:
+  - **LD2410B per-gate readout** for sides A/B: moving and static energy
+    per gate (0–8), matching the same engineering-mode detail
+    fpp-sled-mailbox's own diagnostic mode shows. Radars now run in
+    engineering mode from the moment they connect; falls back to basic
+    mode automatically (present/distance/energy only, no per-gate detail)
+    if a unit doesn't accept the mode-switch — direction/parked detection
+    is unaffected either way.
+  - **Raw BLE scan**: the sorted list of unique addresses from the most
+    recent scan window, not just the count.
+  - **Raw WiFi scan**: same, for probe-request source addresses.
+  - Each panel shows a "stale" badge once its source module hasn't
+    written fresh data in the last few seconds (e.g. module disabled, or
+    daemon stopped) rather than showing frozen data as if it were live.
+- **WiFi crowd-scan now defaults to the onboard adapter (`wlan0`)**
+  instead of assuming a second USB adapter is always required. This is
+  only safe when the Pi reaches its own network some other way (e.g.
+  Ethernet) — see the Setup page's Crowd Scan Config card and the README
+  section above for when you need a second adapter instead. Not
+  auto-detected: network state can change after any check Tally could do.
+  Not yet re-validated against real WiFi crowd-scan hardware (this pass
+  changed the default and added the Diagnostics readout; the underlying
+  scan logic is unchanged from v0.6.0's own not-yet-hardware-validated
+  state for this module).
 
 ## Installation
 
