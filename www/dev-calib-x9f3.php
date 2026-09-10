@@ -54,6 +54,7 @@ function calib_audit_log($logFile, $event) {
 $cfg = calib_load_cfg($CONFIG_FILE);
 $passwordHash = $cfg['calibration']['password_hash'] ?? '';
 $timeoutMin = (int)($cfg['calibration']['session_timeout_min'] ?? 30);
+$cameraDevice = $cfg['calibration']['camera_device'] ?? '/dev/video0';
 
 $error = '';
 $message = '';
@@ -81,6 +82,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         @unlink($SESSION_FILE);
         calib_audit_log($AUDIT_LOG, "Calibration mode DEACTIVATED (manual)");
         $message = 'Calibration mode deactivated.';
+    } elseif ($action === 'set_camera') {
+        // Only reachable while a session is already active (form is only
+        // rendered in that branch below) -- still re-verified server-side
+        // via calib_session_active() rather than trusting the client.
+        [$activeNow] = calib_session_active($SESSION_FILE);
+        if ($activeNow) {
+            $newDevice = trim($_POST['camera_device'] ?? '');
+            if ($newDevice !== '' && preg_match('#^/dev/[A-Za-z0-9_/-]+$#', $newDevice)) {
+                $cfg['calibration']['camera_device'] = $newDevice;
+                @file_put_contents($CONFIG_FILE, json_encode($cfg, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
+                $cameraDevice = $newDevice;
+                $message = "Camera device set to {$newDevice}.";
+            } else {
+                $error = 'Camera device must look like a /dev path (e.g. /dev/video0).';
+            }
+        }
     }
 }
 
@@ -113,13 +130,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     <?php if ($active): ?>
       <p>Status: <strong style="color:#8fd18f;">ACTIVE</strong> — expires in <span id="calibRemaining"><?= (int)$remaining ?></span>s</p>
-      <p class="muted">
-        Live camera frame preview would render here once the camera-frame
-        capture pipeline is implemented (not yet built — this route only
-        implements the activation/expiry/audit gating from project spec
-        section 6 so far).
-      </p>
-      <form method="post">
+
+      <div style="background:#000;border:1px solid #444;border-radius:4px;min-height:180px;display:flex;align-items:center;justify-content:center;overflow:hidden;">
+        <img id="calibFrame" alt="camera preview" style="max-width:100%;display:none;">
+        <span id="calibFrameMsg" class="muted">Loading preview…</span>
+      </div>
+      <p class="muted" id="calibFrameStatus" style="margin-top:.4rem;"></p>
+
+      <form method="post" style="display:flex;gap:.5rem;align-items:end;margin-top:.75rem;">
+        <input type="hidden" name="action" value="set_camera">
+        <div style="flex:1;">
+          <label>Camera device</label>
+          <input type="text" name="camera_device" value="<?= e($cameraDevice) ?>" style="width:100%;padding:.4rem;background:#222;border:1px solid #555;color:#eee;border-radius:4px;">
+        </div>
+        <button type="submit" class="btn-primary" style="height:2.2rem;">Set</button>
+      </form>
+
+      <form method="post" style="margin-top:.75rem;">
         <input type="hidden" name="action" value="deactivate">
         <button type="submit" class="btn-danger">Deactivate Now</button>
       </form>
@@ -130,6 +157,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           document.getElementById('calibRemaining').textContent = Math.max(0, remaining);
           if (remaining <= 0) location.reload();
         }, 1000);
+
+        // Poll one JPEG snapshot at a time (not an MJPEG stream) -- simpler,
+        // and doesn't hold the capture device open between refreshes.
+        const img = document.getElementById('calibFrame');
+        const msg = document.getElementById('calibFrameMsg');
+        const status = document.getElementById('calibFrameStatus');
+        function refreshFrame() {
+          const url = 'dev-calib-snapshot-k7q2.php?t=' + Date.now();
+          const probe = new Image();
+          probe.onload = () => {
+            img.src = probe.src;
+            img.style.display = '';
+            msg.style.display = 'none';
+            status.textContent = 'Updated ' + new Date().toLocaleTimeString();
+          };
+          probe.onerror = () => {
+            img.style.display = 'none';
+            msg.style.display = '';
+            msg.textContent = 'Camera capture failed — check the device path above and the plugin log.';
+          };
+          probe.src = url;
+        }
+        refreshFrame();
+        setInterval(refreshFrame, 1500);
       </script>
     <?php else: ?>
       <form method="post">

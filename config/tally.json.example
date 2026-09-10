@@ -79,6 +79,7 @@
   },
   "calibration": {
     "password_hash": "",
-    "session_timeout_min": 30
+    "session_timeout_min": 30,
+    "camera_device": "/dev/video0"
   }
 }
