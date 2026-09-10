@@ -23,10 +23,20 @@ function readJsonFile($path) {
 // A live-state file is only meaningful while its writer is actively
 // running -- once stale, present it as "not currently live" rather than
 // as fresh data, same reasoning as ld2410.py's own stale flag.
+//
+// $maxAgeS is only the fallback for writers with no scan cadence of
+// their own (ld2410's 0.5s heartbeat). BLE/WiFi only write once per
+// interval_s, so a fixed 5s threshold would show "Stale" for most of
+// the idle time between two perfectly good scans -- confirmed on real
+// hardware, where a 30s scan interval sat "stale" 25+ of every 30
+// seconds. When the payload carries its own interval_s, judge staleness
+// against that instead, with slack for the scan window itself plus one
+// missed cycle before calling it stale.
 function withStale($data, $maxAgeS = 5.0) {
     if ($data === null) return null;
     $updatedAt = $data['updated_at'] ?? 0;
-    $data['stale'] = (microtime(true) - (float)$updatedAt) > $maxAgeS;
+    $effectiveMaxAge = isset($data['interval_s']) ? ((float)$data['interval_s'] * 2.5) : $maxAgeS;
+    $data['stale'] = (microtime(true) - (float)$updatedAt) > $effectiveMaxAge;
     return $data;
 }
 

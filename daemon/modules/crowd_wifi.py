@@ -102,9 +102,13 @@ class CrowdWiFiModule(SensorModule):
             try:
                 addresses = _unique_probe_sources(interface, scan_timeout_s)
                 self._emit(kind="scan", source="wifi", raw_count=len(addresses))
+                # interval_s lets the Diagnostics page judge staleness
+                # against this module's own scan cadence -- see the
+                # matching comment in crowd_ble.py.
                 self._write_live_state("crowd_wifi_live.json", {
                     "addresses": addresses,
                     "count": len(addresses),
+                    "interval_s": interval_s,
                 })
                 self.log.debug("[WiFi] scan: %d unique probe-request sources", len(addresses))
                 probed = True

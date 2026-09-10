@@ -71,9 +71,15 @@ class CrowdBLEModule(SensorModule):
                 self._emit(kind="scan", source="ble", raw_count=len(addresses))
                 # Diagnostics-only, never persisted to the DB history --
                 # see _write_live_state()'s docstring for why.
+                # interval_s lets the Diagnostics page judge staleness
+                # against this module's own scan cadence rather than a
+                # fixed threshold -- a 60s-interval module's data is still
+                # "live" 40s after the last write, unlike ld2410's 0.5s
+                # heartbeat.
                 self._write_live_state("crowd_ble_live.json", {
                     "addresses": addresses,
                     "count": len(addresses),
+                    "interval_s": interval_s,
                 })
                 self.log.debug("[BLE] scan: %d unique addresses", len(addresses))
             except Exception as exc:
