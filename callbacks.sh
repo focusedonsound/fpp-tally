@@ -82,11 +82,20 @@ except: print('true')
 }
 
 daemon_stop() {
+    # is-enabled only checks that the unit's symlink exists on disk -- it
+    # does NOT require a working systemd to answer, so it can report
+    # "enabled" even where systemctl itself is non-functional (e.g. no
+    # systemd as PID 1, as in some container test environments). Falling
+    # through to the PID-based kill below when the actual stop command
+    # fails is what makes this safe either way -- a `return 0` here on
+    # failure would silently leave the daemon running.
     _SYSTEMCTL="sudo systemctl"
     if $_SYSTEMCTL is-enabled --quiet tally 2>/dev/null; then
         log "Stopping daemon via systemctl..."
-        $_SYSTEMCTL stop tally >> "$LOG_FILE" 2>&1 || log "WARN: systemctl stop failed"
-        return 0
+        if $_SYSTEMCTL stop tally >> "$LOG_FILE" 2>&1; then
+            return 0
+        fi
+        log "WARN: systemctl stop failed — falling back to PID-based stop"
     fi
 
     if [[ ! -f "$PID_FILE" ]]; then
