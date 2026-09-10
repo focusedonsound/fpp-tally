@@ -123,7 +123,15 @@ function diagGateBars(side, sideData) {
   if (!sideData.engineering || !sideData.gate_move_energy) {
     const moveE = sideData.move_energy ?? 0;
     const staticE = sideData.static_energy ?? 0;
-    html += `<div class="text-muted small mb-1">Per-gate detail unavailable in basic mode.</div>`;
+    // Negotiated engineering mode at connect but the most recent report
+    // still decoded as basic-format -- worth calling out distinctly from
+    // "never negotiated it at all," since it usually means a marginal
+    // connection (noisy/loose wiring) rather than a config problem.
+    if (sideData.engineering_negotiated) {
+      html += `<div class="text-muted small mb-1">⚠️ Negotiated engineering mode at connect, but the most recent report came back in basic format — per-gate detail unavailable right now. Often a marginal serial connection (check the cable/wiring on this side) rather than a config issue.</div>`;
+    } else {
+      html += `<div class="text-muted small mb-1">Per-gate detail unavailable — this unit didn't accept engineering mode at connect.</div>`;
+    }
     html += `<div class="small">Move energy: <strong>${moveE}</strong> &nbsp; Static energy: <strong>${staticE}</strong></div>`;
     if (sideData.detect_dist_cm != null) {
       html += `<div class="small text-muted">Detected distance: ${sideData.detect_dist_cm} cm</div>`;

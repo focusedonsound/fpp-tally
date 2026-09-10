@@ -178,7 +178,22 @@ def _report_to_dict(reader: _RadarReader) -> dict:
     stale = (time.time() - reader.last_report_ts) > 3.0 if reader.last_report_ts else True
     base = {
         "connected": reader._ser is not None,
-        "engineering": reader.engineering,
+        # "engineering" reflects the ACTUAL type of the most recent decoded
+        # report, not reader.engineering (which only records whether the
+        # one-time enable-engineering-mode handshake succeeded at connect
+        # time). Those can disagree: a unit that negotiated engineering
+        # mode fine can still intermittently (or permanently, e.g. a loose
+        # connection) stream basic-format frames afterward -- decode_eng_frame
+        # returning None falls back to decode_report_frame in poll_present(),
+        # silently. Using the stale connect-time flag here produced exactly
+        # the confusing real-hardware symptom this replaced: the page
+        # labeled a unit "engineering mode" while showing no per-gate data
+        # for it, because the label and the data came from two different
+        # points in time. engineering_negotiated is kept alongside for
+        # troubleshooting -- "never negotiated" and "negotiated but not
+        # currently streaming it" are different problems.
+        "engineering": isinstance(r, proto.Ld2410EngReport),
+        "engineering_negotiated": reader.engineering,
         "stale": stale,
         "port": reader.port,
     }
