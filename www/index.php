@@ -160,7 +160,6 @@ $mqtt = $cfg['mqtt'] ?? [];
            <?= !empty($mods['crowd_ble']) ? 'checked' : '' ?> onchange="tallyToggleSection('crowd', this.checked || document.getElementById('modCrowdWifi').checked)">
     <label class="form-check-label" for="modCrowdBle">
       BLE crowd/device estimate (Option 3a — onboard Bluetooth, free)
-      <span class="badge bg-warning text-dark">not yet implemented</span>
     </label>
   </div>
   <div class="form-check form-switch">
@@ -168,7 +167,7 @@ $mqtt = $cfg['mqtt'] ?? [];
            <?= !empty($mods['crowd_wifi']) ? 'checked' : '' ?> onchange="tallyToggleSection('crowd', this.checked || document.getElementById('modCrowdBle').checked)">
     <label class="form-check-label" for="modCrowdWifi">
       WiFi crowd/device estimate (Option 3b — second USB adapter, monitor mode)
-      <span class="badge bg-warning text-dark">not yet implemented</span>
+      <span class="badge bg-danger">needs a privileged daemon — see docs</span>
     </label>
   </div>
   <div class="form-check form-switch">
@@ -317,13 +316,16 @@ $mqtt = $cfg['mqtt'] ?? [];
   </div>
 </div>
 
-<div class="tally-card tally-hw-disabled" id="section-crowd" <?= (empty($mods['crowd_ble']) && empty($mods['crowd_wifi'])) ? 'style="display:none;"' : '' ?>>
-  <h4><i class="fas fa-fw fa-user-group"></i> Crowd Scan Config
-    <span class="badge bg-warning text-dark">not yet implemented</span>
-  </h4>
+<div class="tally-card" id="section-crowd" <?= (empty($mods['crowd_ble']) && empty($mods['crowd_wifi'])) ? 'style="display:none;"' : '' ?>>
+  <h4><i class="fas fa-fw fa-user-group"></i> Crowd Scan Config</h4>
   <p class="text-muted small">
-    Modern devices randomize both BLE and WiFi identifiers by default — treat this as a
-    relative crowd-density indicator, not an exact headcount.
+    <strong>Modern devices randomize both BLE and WiFi identifiers by default</strong> — treat
+    this as a relative crowd-density indicator, not an exact headcount. WiFi scanning also
+    needs a raw-socket-capable interface in monitor mode and elevated daemon privileges Tally
+    does not grant itself by default — see the Setup checklist in README.md before enabling it.
+    When both BLE and WiFi are enabled, the higher of the two latest readings is published as
+    the combined estimate (their identifiers can't be reliably deduplicated against each other,
+    so summing them would double-count devices seen on both radios).
   </p>
   <div class="row g-2">
     <div class="col-md-4">

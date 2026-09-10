@@ -11,8 +11,8 @@ FPP playlists/effects live in response to traffic.
 |---|---|---|
 | 1 | 2× HLK-LD2410B radar (driveway/zone) | ✅ Working |
 | 2 | MLX90640 thermal array (entrance/street zone) | ⚠️ Implemented, not yet hardware-validated |
-| 3a | Onboard Bluetooth (BLE crowd/device estimate) | 🚧 Scaffolded, not yet implemented |
-| 3b | Second USB WiFi adapter (monitor-mode crowd estimate) | 🚧 Scaffolded, not yet implemented |
+| 3a | Onboard Bluetooth (BLE crowd/device estimate) | ✅ Working |
+| 3b | Second USB WiFi adapter (monitor-mode crowd estimate) | ⚠️ Implemented, needs elevated daemon privileges — see below |
 | 4 | BME280 temperature/humidity | 🚧 Scaffolded, not yet implemented |
 
 Options 1 and 2 are not mutually exclusive — run either alone, or both for a
@@ -56,10 +56,50 @@ never blocks the others.
   min-travel-columns defaults as a starting point to tune once you have
   the hardware wired up.
 
-BLE, WiFi, and BME280 modules are still present in the codebase (same
-interface as LD2410B/thermal, selectable in the wizard) but their `run()`
-methods currently just log a warning and idle — they do not fabricate
-data. Each ships as its own follow-up release.
+BME280 is still present in the codebase (same interface as the others,
+selectable in the wizard) but its `run()` method currently just logs a
+warning and idles.
+
+## What's new in v0.3.0
+
+- **BLE crowd-scan module (Option 3a) implemented** — passive scan via
+  onboard Bluetooth on a configurable interval, counting unique addresses
+  per scan window. Works out of the box on the daemon's default
+  unprivileged user.
+- **WiFi crowd-scan module (Option 3b) implemented** — passive 802.11
+  probe-request sniffing on a monitor-mode interface, same
+  count-unique-per-window approach. **Requires elevated privileges** Tally
+  does not grant itself (see "Enabling WiFi crowd scanning" below) — logs
+  a clear, one-time diagnostic and idles rather than retrying forever if
+  it can't open a raw socket.
+- When both BLE and WiFi are enabled, the daemon publishes the higher of
+  their two latest readings as a combined estimate, rather than summing
+  them — their identifiers are unrelated address spaces (a phone's BLE and
+  WiFi MACs are randomized independently), so summing would double-count
+  every device visible on both radios.
+- Both modules' scan/dedup logic is unit-tested against fake
+  scanner/sniffer implementations (no real BLE crowd or WiFi hardware
+  available to field-test against during development).
+
+### Enabling WiFi crowd scanning
+
+`tally.service` runs the daemon as the unprivileged `fpp` user (matching
+the rest of Tally, and FPP's own plugin conventions). Raw 802.11 frame
+capture needs elevated privileges, which this build does not request on
+its own — that's a deliberate scope boundary pending a decision on how
+much privilege escalation is appropriate for this plugin to request by
+default, not an oversight. If you want to enable it yourself:
+
+```bash
+sudo setcap cap_net_raw,cap_net_admin=eip /usr/bin/python3.XX
+```
+
+(replace `python3.XX` with your system's actual interpreter binary, and
+be aware this grants that capability to *every* script run by that
+interpreter, not just Tally's daemon — evaluate the tradeoff for your
+system before doing this). You'll also need to put the configured
+interface into monitor mode yourself (`sudo iw dev wlan1 set type
+monitor`) before starting the daemon; Tally doesn't do this for you.
 
 ## Installation
 

@@ -40,8 +40,8 @@ photos are marked `[PHOTO PLACEHOLDER]`.
 
 | Part | Notes |
 |---|---|
-| 3a: onboard Pi Bluetooth | Free, no purchase, default |
-| 3b: second USB WiFi adapter | Must support monitor mode — confirm before buying/relying on it (see section 6, Known Risks) |
+| 3a: onboard Pi Bluetooth | Free, no purchase, default — works out of the box |
+| 3b: second USB WiFi adapter | Must support monitor mode — confirm before buying/relying on it (see section 6, Known Risks). Also needs elevated daemon privileges and the interface manually set to monitor mode — see README.md's "Enabling WiFi crowd scanning" before you plan around this one. |
 
 ### Option 4 — BME280 environment sensor
 

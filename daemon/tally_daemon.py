@@ -130,11 +130,37 @@ def _publish_zone_counts(db: TallyDB, ha: TallyHA, cfg: Dict[str, Any], zone: st
                         parked_today, parked_total)
 
 
-def _handle_scan_event(db: TallyDB, ha: TallyHA, cfg: Dict[str, Any], ev: Dict[str, Any]) -> None:
+def _handle_scan_event(db: TallyDB, ha: TallyHA, cfg: Dict[str, Any], mods_enabled: Dict[str, bool],
+                        ev: Dict[str, Any]) -> None:
     source = ev["source"]
     offset = int((cfg.get("crowd_scan", {}) or {}).get("device_offset", 0))
     db.log_scan(source, ev["raw_count"], offset)
-    latest = db.latest_scan()
+
+    # BLE and WiFi identifiers are unrelated address spaces (a phone's BLE
+    # MAC and WiFi probe MAC are randomized independently), so there's no
+    # way to actually deduplicate the same physical device appearing in
+    # both -- summing the two would double-count every device that shows
+    # up on both radios. Taking the max of the two latest readings avoids
+    # that double-count while still reflecting whichever radio currently
+    # sees more devices, which is the most defensible reading of the
+    # spec's "combine/dedupe into a combined source count" given that
+    # constraint (see project spec section 8, and the randomization
+    # caveat repeated throughout the crowd-scan modules and the UI).
+    if mods_enabled.get("crowd_ble") and mods_enabled.get("crowd_wifi"):
+        latest_ble = db.latest_scan(source="ble")
+        latest_wifi = db.latest_scan(source="wifi")
+        if latest_ble and latest_wifi:
+            # Pick whichever reading is higher as a single consistent
+            # (raw, offset) pair -- maxing raw and adjusted independently
+            # could mix two different scans' numbers into a combination
+            # neither radio actually reported.
+            winner = (latest_ble if latest_ble["adjusted_count"] >= latest_wifi["adjusted_count"]
+                      else latest_wifi)
+            db.log_scan("combined", winner["raw_count"], winner["offset_applied"])
+            ha.set_devices_nearby(winner["adjusted_count"])
+            return
+
+    latest = db.latest_scan(source=source)
     if latest:
         ha.set_devices_nearby(latest["adjusted_count"])
 
@@ -236,7 +262,7 @@ def main() -> None:
                 if kind == "vehicle":
                     _handle_vehicle_event(db, ha, cfg, ev)
                 elif kind == "scan":
-                    _handle_scan_event(db, ha, cfg, ev)
+                    _handle_scan_event(db, ha, cfg, mods_enabled, ev)
                 elif kind == "environment":
                     _handle_environment_event(db, ha, ev)
                 else:
