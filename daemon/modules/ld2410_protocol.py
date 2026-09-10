@@ -190,6 +190,15 @@ def decode_eng_frame(frame: bytes) -> Optional[Ld2410EngReport]:
     if report_type != 0x01 or j + 2 + NUM_GATES + NUM_GATES > len(body):
         return None
 
+    # Same plausibility bound decode_report_frame applies -- confirmed on
+    # real hardware: occasional USB-serial noise garbles a distance field
+    # to a bogus ~32000+ cm value (max u16 range) while the rest of the
+    # frame still passes the header/footer/length checks. Reject the
+    # whole frame rather than surface a nonsense reading on the
+    # Diagnostics page; the caller falls back to the next frame/poll.
+    if not (0 <= move_dist <= 9000 and 0 <= static_dist <= 9000):
+        return None
+
     max_move_gate = body[j]
     j += 1
     max_static_gate = body[j]
