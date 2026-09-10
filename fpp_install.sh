@@ -77,12 +77,22 @@ chmod +x "${PLUGIN_DIR}/commands/"*.sh 2>/dev/null || true
 chmod +x "${PLUGIN_DIR}/callbacks.sh" 2>/dev/null || true
 
 # ── Write default config if none exists ─────────────────────────
+# Found on real hardware (not caught by container-based testing, which had
+# no unprivileged web-server user to expose it): this installer runs as
+# root, so a bare `cp` here leaves the file root:root -- but the Setup
+# page's save.php runs as the unprivileged 'fpp' user (PHP-FPM's pool
+# user), which then can't write its own settings on a fresh install. chown
+# it the same way the state directory already is (see above) rather than
+# leaving every future Setup-page Save silently fail until someone
+# happens to fix ownership by hand over SSH.
 CONFIG="/home/fpp/media/config/tally.json"
 if [[ ! -f "$CONFIG" ]]; then
     log "Writing default config to $CONFIG"
     cp "${PLUGIN_DIR}/config/tally.json.example" "$CONFIG" 2>/dev/null \
         || log "WARN: could not copy default config"
 fi
+chown fpp:fpp "$CONFIG" 2>/dev/null \
+    || log "WARN: could not chown $CONFIG to fpp:fpp (Setup page saves may fail until this is fixed manually)"
 
 # ── Hidden camera calibration mode: fail-safe reset ──────────────
 # Section 6 of the project spec: calibration mode must default OFF after
@@ -142,7 +152,19 @@ else
     log "WARN: sudoers rule validation failed — rule not installed (daemon control may require manual start)"
 fi
 
-setSetting restartFlag 1 2>/dev/null || true
+# ── Fix log file ownership ────────────────────────────────────────
+# Found on real hardware: this script's own log() calls create
+# $LOGFILE as root (this installer runs as root), and the daemon then
+# runs as the unprivileged 'fpp' user (see tally.service). Under
+# systemd that's masked -- systemd itself opens the StandardOutput/
+# StandardError append-redirect as root before dropping to User=fpp,
+# so log lines appear to land fine even though Python's own
+# logging.FileHandler(LOG_FILE) is silently failing and falling back
+# to stderr underneath. That fallback isn't there at all under the
+# nohup path callbacks.sh uses when systemd isn't managing the
+# service, so this has to be fixed at the source rather than relied
+# on to keep accidentally working.
+chown fpp:fpp "$LOGFILE" 2>/dev/null || true
 
 log "=== Tally install complete ==="
 exit 0
