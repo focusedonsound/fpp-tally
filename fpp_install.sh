@@ -21,6 +21,16 @@ log "=== Tally install started (user=$(whoami), uid=$(id -u)) ==="
 # ── Create media directories ─────────────────────────────────────
 mkdir -p /home/fpp/media/config
 mkdir -p /home/fpp/media/plugins/fpp-tally/state
+# This installer runs as root, so a bare mkdir leaves the directory
+# root:root -- but the web UI (PHP, running as the 'fpp' user) needs to
+# write into it too (trigger.php's command queue, the hidden calibration
+# route's session file), regardless of which user ends up starting the
+# daemon itself (root at early boot vs. fpp via callbacks.sh, depending on
+# how FPP invokes plugin lifecycle hooks on a given install). chown here
+# once, up front, rather than requiring every script that touches this
+# directory to defensively fix ownership on every write.
+chown -R fpp:fpp /home/fpp/media/plugins/fpp-tally/state 2>/dev/null \
+    || log "WARN: could not chown state dir to fpp:fpp (web UI writes there may fail until this is fixed manually)"
 
 # pluginInfo.json's dependencies.packages block already declares the apt
 # packages this plugin needs, so FPP 10+ installs them before this script
