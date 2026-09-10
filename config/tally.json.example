@@ -54,6 +54,7 @@
     "ble_enabled": true,
     "wifi_enabled": false,
     "wifi_interface": "wlan0",
+    "wifi_hop_channels": [1, 6, 11],
     "interval_s": 60,
     "device_offset": 0,
     "crowd_threshold": 0

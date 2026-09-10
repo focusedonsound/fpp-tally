@@ -99,15 +99,35 @@ default, not an oversight. If you want to enable it yourself:
 
 ```bash
 sudo setcap cap_net_raw,cap_net_admin=eip /usr/bin/python3.XX
+sudo setcap cap_net_admin=eip $(readlink -f $(which iw))
 ```
 
-(replace `python3.XX` with your system's actual interpreter binary, and
-be aware this grants that capability to *every* script run by that
-interpreter, not just Tally's daemon — evaluate the tradeoff for your
-system before doing this). You'll also need to put the configured
-interface into monitor mode yourself (`sudo iw dev wlan0 set type
-monitor`, or `wlan1` etc. if you're using a second adapter) before
-starting the daemon; Tally doesn't do this for you.
+(replace `python3.XX` with your system's actual interpreter binary --
+`readlink -f $(which python3)` finds it -- and be aware the first command
+grants that capability to *every* script run by that interpreter, not
+just Tally's daemon; evaluate the tradeoff for your system before doing
+this). **Both commands are needed**, not just the first one: the daemon
+opens its own raw socket in-process (covered by the python3 grant), but
+it also shells out to `iw` to hop across channels 1/6/11 during each scan
+(confirmed necessary on real hardware — a monitor-mode adapter sits on
+whatever channel `iw` last set it to, so without hopping the module only
+ever sees devices probing on that one fixed channel, which read as
+"0 devices nearby" even with real phones in range). `iw` running as its
+own subprocess doesn't inherit the daemon's own capability grant, so it
+needs the second `setcap` line to be able to change channels itself. If
+only the first is set, WiFi scanning will still run without the earlier
+permission error, but stays parked on one channel — check the daemon log
+for "Channel hopping unavailable" if scan results seem too low.
+
+You'll also need to put the configured interface into monitor mode
+yourself (`sudo iw dev wlan0 set type monitor`, or `wlan1` etc. if you're
+using a second adapter) before starting the daemon; Tally doesn't do this
+for you. Confirmed on real hardware: the Raspberry Pi's own onboard WiFi
+chip (`brcmfmac` driver, e.g. the 3B+'s built-in adapter) does **not**
+support monitor mode at all (`iw` fails with "Operation not supported")
+— if that's your situation, you need a genuine external USB adapter with
+a monitor-mode-capable chipset (confirmed working: RTL8192CU) rather than
+defaulting to the onboard adapter.
 
 ## What's new in v0.4.0
 
@@ -261,6 +281,24 @@ backend's premium-tier logic once that's actually defined.
     with genuinely no way to see it on the Reporting page. Fixed to check
     `bme280 OR dht11`, matching the check the MQTT/HA-discovery code
     already had right.
+  - The Diagnostics/calibration camera panels polled on a fixed setInterval
+    regardless of how long the previous capture took; each capture opens
+    the V4L2 device fresh via `ffmpeg`, which took ~3.2s on this Pi 3B+ —
+    longer than the 1.5s poll gap — so overlapping requests fought over
+    the same device and the feed visibly "started and stopped." Fixed by
+    self-chaining each poll to only fire after the previous one settles,
+    plus a non-blocking flock server-side as defense in depth.
+  - **WiFi crowd-scan reported 0 devices with real phones in range**: a
+    monitor-mode adapter stays parked on whatever channel `iw` last set
+    it to, and the module never changed channels, so it only ever saw
+    probe requests on that one fixed channel (confirmed: BLE saw 14 real
+    devices in the same window WiFi saw 0). Fixed by hopping across
+    channels 1/6/11 during each scan window — see the "Enabling WiFi
+    crowd scanning" section above for the second `setcap` this needs.
+  - Confirmed the Raspberry Pi's own onboard WiFi chip does not support
+    monitor mode at all (driver-level limitation, not a Tally issue) —
+    WiFi crowd-scan needs a genuine external USB adapter with a
+    monitor-mode-capable chipset; confirmed working: RTL8192CU.
 
 ## Installation
 
