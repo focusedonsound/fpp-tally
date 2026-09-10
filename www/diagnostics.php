@@ -23,8 +23,11 @@ ini_set('display_errors', '0');
 .tally-card { border: 1px solid rgba(255,255,255,0.12); border-radius: .4rem; padding: 1rem; margin-bottom: 1rem; }
 .diag-gatebar-row { display: flex; align-items: center; gap: .5rem; margin-bottom: 3px; }
 .diag-gatebar-label { width: 3.2rem; font-size: .75rem; color: #999; text-align: right; flex-shrink: 0; }
-.diag-gatebar-track { flex: 1; height: 14px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; }
+.diag-gatebar-track { flex: 1; height: 14px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; position: relative; }
 .diag-gatebar-fill { height: 100%; border-radius: 3px; transition: width .2s ease; }
+.diag-gatebar-fill.over { box-shadow: 0 0 0 1px #fff inset; }
+.diag-threshold-line { position: absolute; top: -2px; bottom: -2px; width: 2px; background: #fff; opacity: .85; pointer-events: none; }
+.diag-threshold-box { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: .3rem; padding: .6rem .75rem; }
 .diag-gatebar-fill.move { background: #36a2eb; }
 .diag-gatebar-fill.static { background: #ff9f40; }
 .diag-gatebar-val { width: 2rem; font-size: .75rem; color: #ccc; text-align: right; flex-shrink: 0; }
@@ -75,6 +78,23 @@ ini_set('display_errors', '0');
         &nbsp;&nbsp;<span class="sw" style="background:#ff9f40;"></span> Static energy
         &nbsp;&nbsp;each gate ≈ 0.75&nbsp;m, gate 0 nearest the sensor
       </div>
+      <div class="diag-threshold-box mb-3">
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <label class="small text-muted mb-0" for="diagMinEnergy">Detection threshold (min_energy)</label>
+          <input type="number" id="diagMinEnergy" class="form-control form-control-sm" style="width:6rem;" min="0" max="500" value="20" oninput="diagRedrawGateBars()">
+          <button type="button" class="tally-btn tally-btn-sm" onclick="diagSaveMinEnergy()">
+            <i class="fas fa-floppy-disk"></i> Save &amp; Apply
+          </button>
+          <span class="small" id="diagMinEnergyStatus"></span>
+        </div>
+        <div class="text-muted small mt-1">
+          The dashed line on each bar is this threshold. A gate crossing it (highlighted) is what the radar
+          currently treats as a real target for that reading — this is a <strong>single shared value</strong>,
+          applied to whichever gate reads highest, not a per-gate setting. Adjusting the number updates the
+          line immediately so you can see the effect before saving; <strong>Save &amp; Apply</strong> writes it
+          to the config and restarts the daemon so real detection actually uses it.
+        </div>
+      </div>
       <div id="diagLd2410Body" class="row g-4">
         <div class="col-12 text-muted small">Loading…</div>
       </div>
@@ -106,7 +126,20 @@ function diagBadge(text, cls) {
   return `<span class="tally-badge ${cls}">${text}</span>`;
 }
 
-function diagGateBars(side, sideData) {
+// Visual scale ceiling for the bars. Raw gate energy isn't capped at
+// 100 the way the aggregate move/static energy fields are (confirmed on
+// real hardware: individual gates commonly read 100-200+ right next to
+// a real target) -- clamping the bar width at a 0-100 scale made most
+// real signals plateau at full-width and made typical low/idle readings
+// (0-30, the common case with nothing in the zone) only a few pixels
+// wide, which is why the bars looked like they "weren't showing
+// anything." 200 gives both ends of that real range somewhere to go.
+const DIAG_GATE_SCALE_MAX = 200;
+function diagGatePct(energy) {
+  return Math.max(0, Math.min(100, (energy / DIAG_GATE_SCALE_MAX) * 100));
+}
+
+function diagGateBars(side, sideData, threshold) {
   if (!sideData || !sideData.connected) {
     return `<div class="text-muted small">Not connected${sideData && sideData.port ? ' (' + sideData.port + ')' : ''}</div>`;
   }
@@ -139,19 +172,22 @@ function diagGateBars(side, sideData) {
     return html;
   }
 
+  const thresholdLine = `<span class="diag-threshold-line" style="left:${diagGatePct(threshold)}%"></span>`;
   for (let g = 0; g < DIAG_NUM_GATES; g++) {
     const moveE = sideData.gate_move_energy[g] ?? 0;
     const staticE = sideData.gate_static_energy[g] ?? 0;
     const isMaxMove = g === sideData.max_move_gate;
     const isMaxStatic = g === sideData.max_static_gate;
+    const moveOver = moveE >= threshold;
+    const staticOver = staticE >= threshold;
     html += `<div class="diag-gatebar-row">
       <span class="diag-gatebar-label">G${g}${isMaxMove ? ' •' : ''}</span>
-      <span class="diag-gatebar-track"><span class="diag-gatebar-fill move" style="width:${Math.min(100, moveE)}%"></span></span>
+      <span class="diag-gatebar-track"><span class="diag-gatebar-fill move${moveOver ? ' over' : ''}" style="width:${diagGatePct(moveE)}%"></span>${thresholdLine}</span>
       <span class="diag-gatebar-val">${moveE}</span>
     </div>
     <div class="diag-gatebar-row">
       <span class="diag-gatebar-label">${isMaxStatic ? ' •' : ''}</span>
-      <span class="diag-gatebar-track"><span class="diag-gatebar-fill static" style="width:${Math.min(100, staticE)}%"></span></span>
+      <span class="diag-gatebar-track"><span class="diag-gatebar-fill static${staticOver ? ' over' : ''}" style="width:${diagGatePct(staticE)}%"></span>${thresholdLine}</span>
       <span class="diag-gatebar-val">${staticE}</span>
     </div>`;
   }
@@ -370,6 +406,59 @@ async function diagCamActivate() {
   }
 }
 
+// --- LD2410 threshold tuning ---------------------------------------------
+let diagMinEnergyInitDone = false;
+
+function diagCurrentThreshold() {
+  const el = document.getElementById('diagMinEnergy');
+  const v = parseFloat(el.value);
+  return isNaN(v) ? 20 : v;
+}
+
+// Redraws immediately from the last-received data when the threshold
+// input changes, instead of waiting up to 1s for the next poll tick --
+// the whole point of a live threshold line is instant feedback while
+// dragging/typing.
+let diagLastLd2410 = null;
+function diagRedrawGateBars() {
+  if (!diagLastLd2410) return;
+  const threshold = diagCurrentThreshold();
+  document.getElementById('diagLd2410Body').innerHTML = `
+    <div class="col-md-6">
+      <div class="diag-side-title">Side A${diagLastLd2410.zone ? ' — ' + diagLastLd2410.zone : ''}</div>
+      ${diagGateBars('A', diagLastLd2410.A, threshold)}
+    </div>
+    <div class="col-md-6">
+      <div class="diag-side-title">Side B${diagLastLd2410.zone ? ' — ' + diagLastLd2410.zone : ''}</div>
+      ${diagGateBars('B', diagLastLd2410.B, threshold)}
+    </div>`;
+}
+
+async function diagSaveMinEnergy() {
+  const statusEl = document.getElementById('diagMinEnergyStatus');
+  const value = diagCurrentThreshold();
+  statusEl.textContent = 'Saving…';
+  try {
+    const fd = new FormData();
+    fd.append('action', 'set_min_energy');
+    fd.append('min_energy', value);
+    const res = await fetch('plugin.php?plugin=fpp-tally&page=www/diag_tune.php&nopage=1', { method: 'POST', body: fd, cache: 'no-store' });
+    const data = await res.json();
+    if (data.status !== 'OK') {
+      statusEl.textContent = 'Error: ' + (data.message || 'save failed');
+      return;
+    }
+    statusEl.textContent = 'Saved — restarting daemon…';
+    const fd2 = new FormData();
+    fd2.append('action', 'restart');
+    await fetch('plugin.php?plugin=fpp-tally&page=www/control.php&nopage=1', { method: 'POST', body: fd2, cache: 'no-store' });
+    statusEl.textContent = 'Applied.';
+    setTimeout(() => { statusEl.textContent = ''; }, 4000);
+  } catch (e) {
+    statusEl.textContent = 'Request failed.';
+  }
+}
+
 // --- Main poll loop -----------------------------------------------------
 let diagCamInitDone = false;
 
@@ -380,6 +469,11 @@ async function diagPoll() {
     data = await res.json();
   } catch (e) {
     return;
+  }
+
+  if (!diagMinEnergyInitDone && data.ld2410_min_energy != null) {
+    diagMinEnergyInitDone = true;
+    document.getElementById('diagMinEnergy').value = data.ld2410_min_energy;
   }
 
   if (!diagCamInitDone) {
@@ -400,14 +494,16 @@ async function diagPoll() {
   } else if (!data.ld2410) {
     ld2410Body.innerHTML = '<div class="col-12 text-muted small">No radar data yet — waiting for the daemon.</div>';
   } else {
+    diagLastLd2410 = data.ld2410;
+    const threshold = diagCurrentThreshold();
     ld2410Body.innerHTML = `
       <div class="col-md-6">
         <div class="diag-side-title">Side A${data.ld2410.zone ? ' — ' + data.ld2410.zone : ''}</div>
-        ${diagGateBars('A', data.ld2410.A)}
+        ${diagGateBars('A', data.ld2410.A, threshold)}
       </div>
       <div class="col-md-6">
         <div class="diag-side-title">Side B${data.ld2410.zone ? ' — ' + data.ld2410.zone : ''}</div>
-        ${diagGateBars('B', data.ld2410.B)}
+        ${diagGateBars('B', data.ld2410.B, threshold)}
       </div>`;
   }
 

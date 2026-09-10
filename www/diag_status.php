@@ -57,6 +57,7 @@ $result = [
         "thermal"    => !empty($modules['thermal']),
     ],
     "wifi_interface" => $cs['wifi_interface'] ?? 'wlan0',
+    "ld2410_min_energy" => (int)($cfg['ld2410']['min_energy'] ?? 20),
     "camera"         => [
         "require_password" => !empty($calib['require_password_on_diagnostics']),
     ],
