@@ -315,6 +315,45 @@ backend's premium-tier logic once that's actually defined.
     monitor mode at all (driver-level limitation, not a Tally issue) —
     WiFi crowd-scan needs a genuine external USB adapter with a
     monitor-mode-capable chipset; confirmed working: RTL8192CU.
+- **The Setup page's "FPP Triggers" card now actually works.** Until this
+  release it saved playlist/cooldown/timeout config that nothing read —
+  the daemon logged events and published to MQTT, but never called FPP
+  to start a playlist. `tally_fpp.py` (ported from fpp-sled-mailbox's
+  proven `FPPPlayer` — same `GET /api/command/...` call shape, since POST
+  returns 500 on FPP 10.x) makes it real:
+  - Each of the seven trigger rows (`entrance_direction_a/b`,
+    `entrance_parked`, `driveway_direction_a/b`, `driveway_parked`,
+    `crowd_threshold`) fires its configured playlist the moment the
+    matching event happens, non-blocking.
+  - **Only fires while FPP is actively playing something** (checked via
+    `status_name == "playing"` in `/api/fppd/status`) — matching the
+    card's own stated design ("Defers to FPP's native Scheduler for show
+    hours"). A car in the driveway at 2pm in July doesn't start anything;
+    fails closed if FPP's status can't even be read. Deliberately *not*
+    gated on `scheduler.status` — confirmed on real hardware that field
+    only reads `"playing"` for a Scheduler-initiated show and reads
+    `"manual"` (not `"playing"`) for a playlist started any other way,
+    which would have silently blocked every trigger during exactly the
+    "something is actively playing" state this feature exists to react
+    to.
+  - `cooldown_s` is enforced per trigger — a car idling at the sensor's
+    edge won't restart the playlist on every borderline detection.
+  - `crowd_threshold` fires once on the upward crossing, not on every
+    scan while the crowd stays above the line.
+  - `play_timeout_s` is a safety net, not a normal wait: if the triggered
+    playlist is *still* FPP's current playlist after that many seconds
+    (e.g. accidentally left on repeat), Tally calls Stop Now so the
+    Scheduler can resume — a playlist ending on its own is the expected
+    path and never touches this.
+  - All of the above verified with a synthetic test harness (fake FPP
+    status/command responses) covering: basic fire, cooldown suppression,
+    disabled-trigger no-op, show-not-active gating, crowd threshold
+    rising-edge-only firing, and the timeout watchdog both firing
+    correctly and correctly *not* firing once the playlist has already
+    moved on. Not yet exercised against a real scheduled FPP show (no
+    show currently scheduled on the real hardware used for validation,
+    off-season) — the show-active gate means this is inherently something
+    that can only be fully proven during actual show hours.
 
 ## Installation
 

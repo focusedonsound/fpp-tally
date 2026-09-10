@@ -34,6 +34,7 @@ sys.path.insert(0, _SCRIPT_DIR)
 from tally_config import load_config, enabled_modules
 from tally_db import TallyDB
 from tally_ha import TallyHA
+from tally_fpp import TriggerFirer
 from modules.ld2410 import LD2410Module
 from modules.thermal import ThermalModule
 from modules.crowd_ble import CrowdBLEModule
@@ -102,7 +103,27 @@ def poll_cmd_queue() -> str | None:
         return None
 
 
-def _handle_vehicle_event(db: TallyDB, ha: TallyHA, cfg: Dict[str, Any], ev: Dict[str, Any]) -> None:
+def _trigger_key_for_vehicle(zone: str, event_type: str, direction: str | None,
+                              cfg: Dict[str, Any]) -> str | None:
+    """Maps a vehicle event to one of the Setup page's FPP Triggers card
+    keys (entrance_direction_a, entrance_parked, driveway_direction_b,
+    etc.) — the zone keys ("entrance"/"driveway") are literally the
+    trigger key prefixes by design, see index.php's $triggerRows."""
+    if event_type == "parked":
+        return f"{zone}_parked"
+    if event_type == "pass":
+        zone_cfg = (cfg.get("zones", {}) or {}).get(zone, {}) or {}
+        label_a = zone_cfg.get("direction_a_label", "Inbound")
+        label_b = zone_cfg.get("direction_b_label", "Outbound")
+        if direction == label_a:
+            return f"{zone}_direction_a"
+        if direction == label_b:
+            return f"{zone}_direction_b"
+    return None
+
+
+def _handle_vehicle_event(db: TallyDB, ha: TallyHA, cfg: Dict[str, Any], firer: TriggerFirer,
+                           ev: Dict[str, Any]) -> None:
     zone = ev["zone"]
     db.log_event(
         zone=zone,
@@ -114,6 +135,10 @@ def _handle_vehicle_event(db: TallyDB, ha: TallyHA, cfg: Dict[str, Any], ev: Dic
     )
     ha.event("vehicle", {"zone": zone, "event_type": ev["event_type"], "direction": ev.get("direction")})
     _publish_zone_counts(db, ha, cfg, zone)
+
+    trigger_key = _trigger_key_for_vehicle(zone, ev["event_type"], ev.get("direction"), cfg)
+    if trigger_key:
+        firer.fire(trigger_key)
 
 
 def _publish_zone_counts(db: TallyDB, ha: TallyHA, cfg: Dict[str, Any], zone: str) -> None:
@@ -133,7 +158,7 @@ def _publish_zone_counts(db: TallyDB, ha: TallyHA, cfg: Dict[str, Any], zone: st
 
 
 def _handle_scan_event(db: TallyDB, ha: TallyHA, cfg: Dict[str, Any], mods_enabled: Dict[str, bool],
-                        ev: Dict[str, Any]) -> None:
+                        firer: TriggerFirer, ev: Dict[str, Any]) -> None:
     source = ev["source"]
     offset = int((cfg.get("crowd_scan", {}) or {}).get("device_offset", 0))
     db.log_scan(source, ev["raw_count"], offset)
@@ -160,11 +185,13 @@ def _handle_scan_event(db: TallyDB, ha: TallyHA, cfg: Dict[str, Any], mods_enabl
                       else latest_wifi)
             db.log_scan("combined", winner["raw_count"], winner["offset_applied"])
             ha.set_devices_nearby(winner["adjusted_count"])
+            firer.check_crowd_threshold(winner["adjusted_count"])
             return
 
     latest = db.latest_scan(source=source)
     if latest:
         ha.set_devices_nearby(latest["adjusted_count"])
+        firer.check_crowd_threshold(latest["adjusted_count"])
 
 
 def _handle_environment_event(db: TallyDB, ha: TallyHA, ev: Dict[str, Any]) -> None:
@@ -208,6 +235,7 @@ def main() -> None:
 
     db = TallyDB()
     ha = TallyHA(cfg)
+    firer = TriggerFirer(cfg)
 
     ha.setup_status_discovery()
     for zone_name, zone_cfg in (cfg.get("zones", {}) or {}).items():
@@ -254,6 +282,12 @@ def main() -> None:
                     _simulate_crowd_scan(event_queue)
                     log.info("[CmdQueue] simulated crowd scan")
 
+            # Cheap no-op when nothing is currently in flight -- checked
+            # every loop tick rather than from a dedicated thread, since
+            # the event_queue.get(timeout=0.5) below already gives this a
+            # ~0.5s-or-sooner cadence for free.
+            firer.check_timeouts()
+
             try:
                 ev = event_queue.get(timeout=0.5)
             except queue.Empty:
@@ -262,9 +296,9 @@ def main() -> None:
             kind = ev.get("kind")
             try:
                 if kind == "vehicle":
-                    _handle_vehicle_event(db, ha, cfg, ev)
+                    _handle_vehicle_event(db, ha, cfg, firer, ev)
                 elif kind == "scan":
-                    _handle_scan_event(db, ha, cfg, mods_enabled, ev)
+                    _handle_scan_event(db, ha, cfg, mods_enabled, firer, ev)
                 elif kind == "environment":
                     _handle_environment_event(db, ha, ev)
                 else:
