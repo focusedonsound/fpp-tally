@@ -13,7 +13,7 @@ FPP playlists/effects live in response to traffic.
 | 2 | MLX90640 thermal array (entrance/street zone) | ⚠️ Implemented, not yet hardware-validated |
 | 3a | Onboard Bluetooth (BLE crowd/device estimate) | ✅ Working |
 | 3b | Second USB WiFi adapter (monitor-mode crowd estimate) | ⚠️ Implemented, needs elevated daemon privileges — see below |
-| 4 | BME280 temperature/humidity | 🚧 Scaffolded, not yet implemented |
+| 4 | BME280 temperature/humidity | ⚠️ Implemented, not yet hardware-validated |
 
 Options 1 and 2 are not mutually exclusive — run either alone, or both for a
 full entrance+driveway picture. Every module is independently enabled from
@@ -56,10 +56,6 @@ never blocks the others.
   min-travel-columns defaults as a starting point to tune once you have
   the hardware wired up.
 
-BME280 is still present in the codebase (same interface as the others,
-selectable in the wizard) but its `run()` method currently just logs a
-warning and idles.
-
 ## What's new in v0.3.0
 
 - **BLE crowd-scan module (Option 3a) implemented** — passive scan via
@@ -100,6 +96,24 @@ interpreter, not just Tally's daemon — evaluate the tradeoff for your
 system before doing this). You'll also need to put the configured
 interface into monitor mode yourself (`sudo iw dev wlan1 set type
 monitor`) before starting the daemon; Tally doesn't do this for you.
+
+## What's new in v0.4.0
+
+- **BME280 module (Option 4) implemented** — polls temperature/humidity
+  over I2C on a configurable interval (default 10 min), logs to the
+  `environment` table. Shares the I2C bus with the MLX90640 at a different
+  address, no conflict, no multiplexer needed. Purely contextual data for
+  the Reporting page — no detection logic.
+- Not yet validated against real BME280 hardware — none has been available
+  during development. The °C→°F conversion and the poll loop's
+  per-reading error recovery are unit-tested against a fake sensor object.
+
+Every module described in the project spec (LD2410B, thermal, BLE, WiFi,
+BME280) is now implemented. What's left before a 1.0: hardware validation
+of thermal/BME280/WiFi against real sensors, the registration/licensing
+backend (`fpp-tally-license-server`), the hidden calibration route's
+actual camera-frame capture, and the Reporting page's 7/30/90/365-day
+chart views.
 
 ## Installation
 

@@ -175,7 +175,7 @@ $mqtt = $cfg['mqtt'] ?? [];
            <?= !empty($mods['bme280']) ? 'checked' : '' ?> onchange="tallyToggleSection('bme280', this.checked)">
     <label class="form-check-label" for="modBme280">
       BME280 temperature/humidity (Option 4)
-      <span class="badge bg-warning text-dark">not yet implemented</span>
+      <span class="badge bg-danger">not yet hardware-validated</span>
     </label>
   </div>
 </div>
@@ -352,9 +352,9 @@ $mqtt = $cfg['mqtt'] ?? [];
   </div>
 </div>
 
-<div class="tally-card tally-hw-disabled" id="section-bme280" <?= empty($mods['bme280']) ? 'style="display:none;"' : '' ?>>
+<div class="tally-card" id="section-bme280" <?= empty($mods['bme280']) ? 'style="display:none;"' : '' ?>>
   <h4><i class="fas fa-fw fa-cloud-sun"></i> BME280 Config
-    <span class="badge bg-warning text-dark">not yet implemented</span>
+    <span class="badge bg-danger">not yet hardware-validated</span>
   </h4>
   <div class="row g-2">
     <div class="col-md-3">
