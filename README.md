@@ -355,6 +355,31 @@ backend's premium-tier logic once that's actually defined.
     off-season) — the show-active gate means this is inherently something
     that can only be fully proven during actual show hours.
 
+## What's new since v0.7.0 — richer BLE diagnostics
+
+- **Raw BLE Scan on the Diagnostics page is now a real table**, not just a
+  bare address list: address type (`public`/`random`), device name, a
+  best-effort vendor guess (Apple/Google/Microsoft/Samsung, from the
+  manufacturer-data company ID), signal strength, and first/last-seen
+  timestamps within that scan window.
+  - This is groundwork for the eventual goal, not the filtering itself:
+    the plan is to dial the crowd-scan module in to catch visiting
+    phones specifically, not every fixed/paired BLE peripheral in range
+    (a smart bulb, a doorbell, a shed speaker) that shows up on every
+    single scan regardless of whether anyone's actually there. Seeing
+    address type/vendor/timestamp per device is what makes that filter
+    decision informed instead of a guess.
+  - `crowd_ble.py` switched from `BleakScanner.discover()` (one
+    end-of-scan snapshot) to a detection-callback-based scan, so
+    first/last-seen reflect real per-advertisement timestamps instead of
+    an estimate.
+  - `address_type` comes from bleak's BlueZ backend raw device properties
+    (confirmed against the actual installed bleak 3.0.2 source, not
+    bleak's own documented stable API) — degrades to unavailable
+    gracefully on any other backend/platform rather than raising.
+  - Still live-only, still never persisted to the DB — same reasoning as
+    the rest of the Diagnostics page.
+
 ## Installation
 
 Via FPP Plugin Manager (once listed), or manually:

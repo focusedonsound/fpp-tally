@@ -31,6 +31,10 @@ ini_set('display_errors', '0');
 .diag-side-title { font-size: .9rem; font-weight: 600; margin-bottom: .4rem; }
 .diag-addr-list { font-family: monospace; font-size: .8rem; max-height: 220px; overflow-y: auto; margin: 0; padding-left: 1.1rem; }
 .diag-addr-count { font-size: 1.6rem; font-weight: 700; }
+.diag-ble-table { width: 100%; font-size: .8rem; border-collapse: collapse; white-space: nowrap; }
+.diag-ble-table th { text-align: left; font-weight: 600; color: #999; padding: .3rem .6rem; border-bottom: 1px solid rgba(255,255,255,0.15); }
+.diag-ble-table td { padding: .3rem .6rem; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.diag-ble-table td.mono { font-family: monospace; }
 .diag-legend { font-size: .75rem; color: #999; margin-bottom: .5rem; }
 .diag-legend .sw { display: inline-block; width: .7rem; height: .7rem; border-radius: 2px; margin-right: .25rem; vertical-align: middle; }
 .diag-cam-frame { background: #000; border: 1px solid rgba(255,255,255,0.12); border-radius: .4rem; min-height: 220px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
@@ -85,19 +89,14 @@ ini_set('display_errors', '0');
   </div>
 </div>
 
-<div class="row">
-  <div class="col-md-6">
-    <div class="tally-card" id="diagBleCard">
-      <h4><i class="fas fa-fw fa-bluetooth-b"></i> Raw BLE Scan</h4>
-      <div id="diagBleBody" class="text-muted small">Loading…</div>
-    </div>
-  </div>
-  <div class="col-md-6">
-    <div class="tally-card" id="diagWifiCard">
-      <h4><i class="fas fa-fw fa-wifi"></i> Raw WiFi Probe-Request Scan</h4>
-      <div id="diagWifiBody" class="text-muted small">Loading…</div>
-    </div>
-  </div>
+<div class="tally-card" id="diagBleCard">
+  <h4><i class="fas fa-fw fa-bluetooth-b"></i> Raw BLE Scan</h4>
+  <div id="diagBleBody" class="text-muted small">Loading…</div>
+</div>
+
+<div class="tally-card" id="diagWifiCard">
+  <h4><i class="fas fa-fw fa-wifi"></i> Raw WiFi Probe-Request Scan</h4>
+  <div id="diagWifiBody" class="text-muted small">Loading…</div>
 </div>
 
 <script>
@@ -173,6 +172,62 @@ function diagAddrList(bodyEl, data, moduleEnabled, offlineNote) {
   } else {
     html += '<ol class="diag-addr-list">' + addrs.map(a => `<li>${a}</li>`).join('') + '</ol>';
   }
+  bodyEl.innerHTML = html;
+}
+
+function diagRelTime(epochSeconds) {
+  if (!epochSeconds) return '—';
+  const s = Math.max(0, Math.round(Date.now() / 1000 - epochSeconds));
+  if (s < 60) return s + 's ago';
+  return Math.round(s / 60) + 'm ago';
+}
+
+// BLE gets its own richer table (address type, name, RSSI, vendor,
+// first/last seen) instead of the plain address list WiFi uses --
+// groundwork for eventually filtering the raw scan down to "likely a
+// visitor's phone" vs. a fixed/paired peripheral that shows up every
+// scan (see crowd_ble.py's module docstring). Nothing here is persisted;
+// it only ever reflects the daemon's live-state file for the most recent
+// scan window.
+function diagBleTable(bodyEl, data, moduleEnabled) {
+  if (!moduleEnabled) {
+    bodyEl.innerHTML = `<div class="text-muted">Module not enabled in Setup.</div>`;
+    return;
+  }
+  if (!data) {
+    bodyEl.innerHTML = `<div class="text-muted">No scan yet — waiting for the daemon's first scan window.</div>`;
+    return;
+  }
+  const stale = !!data.stale;
+  const devices = data.devices || [];
+  let html = `<div class="d-flex align-items-center gap-2 mb-2">
+    <span class="diag-addr-count">${devices.length}</span>
+    <span class="text-muted small">unique device${devices.length === 1 ? '' : 's'} in most recent scan</span>
+    ${stale ? diagBadge('Stale', 'tally-badge-stale') : ''}
+  </div>`;
+
+  if (devices.length === 0) {
+    html += `<div class="text-muted small">No devices seen in the most recent scan window.</div>`;
+    bodyEl.innerHTML = html;
+    return;
+  }
+
+  html += `<div style="overflow-x:auto;"><table class="diag-ble-table">
+    <thead><tr>
+      <th>Address</th><th>Type</th><th>Name</th><th>Vendor</th><th>RSSI</th><th>First seen</th><th>Last seen</th>
+    </tr></thead><tbody>`;
+  for (const d of devices) {
+    html += `<tr>
+      <td class="mono">${d.address}</td>
+      <td>${d.address_type || '—'}</td>
+      <td>${d.name ? d.name : '<span class="text-muted">—</span>'}</td>
+      <td>${(d.vendors && d.vendors.length) ? d.vendors.join(', ') : '<span class="text-muted">—</span>'}</td>
+      <td>${d.rssi != null ? d.rssi + ' dBm' : '—'}</td>
+      <td>${diagRelTime(d.first_seen)}</td>
+      <td>${diagRelTime(d.last_seen)}</td>
+    </tr>`;
+  }
+  html += '</tbody></table></div>';
   bodyEl.innerHTML = html;
 }
 
@@ -350,7 +405,7 @@ async function diagPoll() {
 
   diagRenderThermal(document.getElementById('diagThermalBody'), data.thermal, data.modules.thermal);
 
-  diagAddrList(document.getElementById('diagBleBody'), data.crowd_ble, data.modules.crowd_ble, null);
+  diagBleTable(document.getElementById('diagBleBody'), data.crowd_ble, data.modules.crowd_ble);
   diagAddrList(document.getElementById('diagWifiBody'), data.crowd_wifi, data.modules.crowd_wifi,
     `Interface: ${data.wifi_interface}. Requires monitor mode + elevated privileges — see the Setup page's Crowd Scan Config warning if this stays empty.`);
 }
