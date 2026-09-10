@@ -234,16 +234,36 @@ let diagCamRequirePassword = false;
 let diagCamAuthed = false;
 let diagCamTimer = null;
 
+const DIAG_CAM_MIN_GAP_MS = 1500;
+let diagCamRunning = false;
+
 function diagCamRefresh() {
   const img = document.getElementById('diagCamImg');
   const msg = document.getElementById('diagCamMsg');
   const status = document.getElementById('diagCamStatus');
   const probe = new Image();
+  const startedAt = Date.now();
+
+  // Self-chained via setTimeout scheduled from onload/onerror, NOT
+  // setInterval -- each capture does a fresh V4L2 device open (ffmpeg),
+  // which can take longer than the nominal poll gap on a Pi 3B+. A fixed
+  // setInterval would fire the next request before the previous one
+  // finished, and two overlapping captures fighting over the same
+  // /dev/videoX produce alternating success/failure -- the camera
+  // visibly "starting and stopping." Waiting for each request to settle
+  // before scheduling the next guarantees only one capture in flight.
+  const scheduleNext = () => {
+    if (!diagCamRunning) return;
+    const elapsed = Date.now() - startedAt;
+    diagCamTimer = setTimeout(diagCamRefresh, Math.max(0, DIAG_CAM_MIN_GAP_MS - elapsed));
+  };
+
   probe.onload = () => {
     img.src = probe.src;
     img.style.display = '';
     msg.style.display = 'none';
     status.textContent = 'Updated ' + new Date().toLocaleTimeString();
+    scheduleNext();
   };
   probe.onerror = () => {
     img.style.display = 'none';
@@ -254,15 +274,16 @@ function diagCamRefresh() {
     } else {
       msg.textContent = 'Camera capture failed — check the configured device and the plugin log.';
     }
+    scheduleNext();
   };
   probe.src = 'plugin.php?plugin=fpp-tally&page=www/diag_snapshot.php&nopage=1&t=' + Date.now();
 }
 
 function diagCamStart() {
-  if (diagCamTimer) return;
+  if (diagCamRunning) return;
+  diagCamRunning = true;
   document.getElementById('diagCamAuth').style.display = 'none';
   diagCamRefresh();
-  diagCamTimer = setInterval(diagCamRefresh, 1500);
 }
 
 async function diagCamActivate() {
@@ -338,6 +359,7 @@ diagPoll();
 const diagInterval = setInterval(diagPoll, 1000);
 window.addEventListener('beforeunload', () => {
   clearInterval(diagInterval);
-  if (diagCamTimer) clearInterval(diagCamTimer);
+  diagCamRunning = false;
+  if (diagCamTimer) clearTimeout(diagCamTimer);
 });
 </script>

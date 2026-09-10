@@ -160,27 +160,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // Poll one JPEG snapshot at a time (not an MJPEG stream) -- simpler,
         // and doesn't hold the capture device open between refreshes.
+        //
+        // Self-chained via setTimeout from onload/onerror, NOT
+        // setInterval -- each capture opens the V4L2 device fresh
+        // (ffmpeg), which can take longer than the nominal poll gap on a
+        // Pi 3B+. A fixed setInterval fires the next request before the
+        // previous one finishes, and two captures overlapping on the
+        // same device produce alternating success/failure -- the feed
+        // visibly "starting and stopping." (dev-calib-snapshot-k7q2.php
+        // also flocks the device server-side as defense in depth.)
+        const MIN_GAP_MS = 1500;
         const img = document.getElementById('calibFrame');
         const msg = document.getElementById('calibFrameMsg');
         const status = document.getElementById('calibFrameStatus');
         function refreshFrame() {
           const url = 'dev-calib-snapshot-k7q2.php?t=' + Date.now();
           const probe = new Image();
+          const startedAt = Date.now();
+          const scheduleNext = () => setTimeout(refreshFrame, Math.max(0, MIN_GAP_MS - (Date.now() - startedAt)));
           probe.onload = () => {
             img.src = probe.src;
             img.style.display = '';
             msg.style.display = 'none';
             status.textContent = 'Updated ' + new Date().toLocaleTimeString();
+            scheduleNext();
           };
           probe.onerror = () => {
             img.style.display = 'none';
             msg.style.display = '';
             msg.textContent = 'Camera capture failed — check the device path above and the plugin log.';
+            scheduleNext();
           };
           probe.src = url;
         }
         refreshFrame();
-        setInterval(refreshFrame, 1500);
       </script>
     <?php else: ?>
       <form method="post">

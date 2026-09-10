@@ -97,12 +97,35 @@ if (!preg_match('#^/dev/[A-Za-z0-9_/-]+$#', $device)) {
     exit;
 }
 
-// -f mjpeg to stdout: one frame, no temp file, no race between concurrent
-// pollers. 5s timeout so a device that hangs fails fast instead of
-// piling up slow requests.
+// A V4L2 device only tolerates one opener at a time -- two overlapping
+// captures (a second browser tab, this page's own poll loop racing a
+// slow prior request, the hidden calibration route open at the same
+// time) fighting over the same /dev/videoX is exactly what produced the
+// camera panel "starting and stopping" during testing. Non-blocking
+// flock: a request that loses the race fails fast and cleanly (503)
+// instead of queuing behind or corrupting another capture in progress.
+// The client-side poll loop (diagnostics.php's diagCamRefresh) already
+// waits for each request to finish before firing the next, so this is
+// defense in depth against the cases that loop can't control.
+$lockFile = "/home/fpp/media/plugins/fpp-tally/state/camera.lock";
+@mkdir(dirname($lockFile), 0755, true);
+$lockFp = fopen($lockFile, 'c');
+if ($lockFp === false || !flock($lockFp, LOCK_EX | LOCK_NB)) {
+    http_response_code(503);
+    header('Content-Type: text/plain');
+    header('Retry-After: 1');
+    echo 'camera busy';
+    exit;
+}
+
+// One frame, no temp file. 5s timeout so a device that hangs (unplugged
+// mid-capture, bus error) fails fast instead of piling up slow requests.
 $cmd = 'timeout 5 ffmpeg -f v4l2 -i ' . escapeshellarg($device) .
        ' -frames:v 1 -q:v 5 -f mjpeg -y - 2>/dev/null';
 $jpeg = shell_exec($cmd);
+
+flock($lockFp, LOCK_UN);
+fclose($lockFp);
 
 if ($jpeg === null || strlen($jpeg) < 4 || substr($jpeg, 0, 2) !== "\xFF\xD8") {
     diag_log($LOG_FILE, "capture failed: device={$device} bytes=" . ($jpeg === null ? 'null' : strlen($jpeg)));

@@ -58,12 +58,31 @@ if (!preg_match('#^/dev/[A-Za-z0-9_/-]+$#', $device)) {
     exit;
 }
 
-// -f mjpeg to stdout: one frame, no temp file, no race between concurrent
-// pollers. 5s timeout so a device that hangs (unplugged mid-session, bus
-// error) fails fast instead of piling up slow requests.
+// A V4L2 device only tolerates one opener at a time. Non-blocking flock
+// on the SAME lock file the Diagnostics page's camera endpoint uses
+// (diag_snapshot.php) -- the two routes share one physical camera, so a
+// request that loses the race here fails fast and cleanly (503) instead
+// of fighting another capture already in progress, whichever route
+// started it.
+$lockFile = "/home/fpp/media/plugins/fpp-tally/state/camera.lock";
+@mkdir(dirname($lockFile), 0755, true);
+$lockFp = fopen($lockFile, 'c');
+if ($lockFp === false || !flock($lockFp, LOCK_EX | LOCK_NB)) {
+    http_response_code(503);
+    header('Content-Type: text/plain');
+    header('Retry-After: 1');
+    echo 'camera busy';
+    exit;
+}
+
+// One frame, no temp file. 5s timeout so a device that hangs (unplugged
+// mid-session, bus error) fails fast instead of piling up slow requests.
 $cmd = 'timeout 5 ffmpeg -f v4l2 -i ' . escapeshellarg($device) .
        ' -frames:v 1 -q:v 5 -f mjpeg -y - 2>/dev/null';
 $jpeg = shell_exec($cmd);
+
+flock($lockFp, LOCK_UN);
+fclose($lockFp);
 
 // A real JPEG starts with the SOI marker (0xFFD8) -- cheap sanity check
 // that ffmpeg actually produced image bytes and not empty/error output
