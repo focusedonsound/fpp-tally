@@ -24,8 +24,15 @@ function daemonRunning() {
     if (!file_exists($pidFile)) return false;
     $pid = trim(@file_get_contents($pidFile));
     if (!$pid || !is_numeric($pid)) return false;
+    // /proc/<pid> existing is enough on Linux (its own dir is always
+    // world-executable) and, unlike posix_kill(), doesn't depend on the
+    // calling user matching the daemon's — PHP-FPM runs as 'fpp', but the
+    // daemon can end up owned by root (e.g. a manual boot-time start, or a
+    // builder testing over SSH as root), which makes posix_kill() report a
+    // false EPERM negative even though the process is alive.
+    if (is_dir("/proc/$pid")) return true;
     if (function_exists('posix_kill')) return posix_kill((int)$pid, 0);
-    return is_dir("/proc/$pid");
+    return false;
 }
 
 function listSerialPorts() {

@@ -12,8 +12,12 @@ function daemonRunning($pf) {
     if (!file_exists($pf)) return false;
     $pid = trim(@file_get_contents($pf));
     if (!$pid || !is_numeric($pid)) return false;
+    // See index.php's daemonRunning() for why /proc is checked before
+    // posix_kill(): the latter can false-negative on a UID mismatch
+    // between PHP-FPM and however the daemon was actually started.
+    if (is_dir("/proc/$pid")) return true;
     if (function_exists('posix_kill')) return posix_kill((int)$pid, 0);
-    return is_dir("/proc/$pid");
+    return false;
 }
 
 $cfg = [];
