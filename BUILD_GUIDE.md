@@ -41,7 +41,8 @@ photos are marked `[PHOTO PLACEHOLDER]`.
 | Part | Notes |
 |---|---|
 | 3a: onboard Pi Bluetooth | Free, no purchase, default — works out of the box |
-| 3b: second USB WiFi adapter | Must support monitor mode — confirm before buying/relying on it (see section 6, Known Risks). Also needs elevated daemon privileges and the interface manually set to monitor mode — see README.md's "Enabling WiFi crowd scanning" before you plan around this one. |
+| 3b: second USB WiFi adapter | Must support monitor mode — confirm before buying/relying on it. The Pi's own onboard WiFi chip does **not** support monitor mode (confirmed on real hardware, Pi 3B+ `brcmfmac` driver) — this has to be a genuine external adapter; confirmed working: RTL8192CU. Also needs elevated daemon privileges and the interface manually set to monitor mode — see README.md's "Enabling WiFi crowd scanning" before you plan around this one. |
+| 3b: **powered USB hub** | **Strongly recommended, not optional, if you're adding a USB WiFi adapter.** Confirmed on real hardware: a Pi 3B+ already running 2 USB-serial radar adapters + a USB webcam hit real under-voltage (`vcgencmd get_throttled` showing the under-voltage bit set, `dmesg` logging "Undervoltage detected!") the moment a USB WiFi adapter was added directly to the Pi's own ports — the whole USB bus reset/re-enumerated repeatedly, which reads as the WiFi module randomly failing ("Network is down") rather than an obvious power problem. Put the WiFi adapter (and the webcam, if you're also using the camera panel) on a powered hub instead of the Pi's own ports once you're running more than one or two USB peripherals. |
 
 ### Option 4 — BME280 environment sensor
 

@@ -12,7 +12,7 @@ FPP playlists/effects live in response to traffic.
 | 1 | 2× HLK-LD2410B radar (driveway/zone) | ✅ Working |
 | 2 | MLX90640 thermal array (entrance/street zone) | ⚠️ Implemented, not yet hardware-validated |
 | 3a | Onboard Bluetooth (BLE crowd/device estimate) | ✅ Working |
-| 3b | Second USB WiFi adapter (monitor-mode crowd estimate) | ⚠️ Implemented, needs elevated daemon privileges — see below |
+| 3b | Second USB WiFi adapter (monitor-mode crowd estimate) — **use a powered USB hub**, see below | ⚠️ Implemented, needs elevated daemon privileges — see below |
 | 4 | BME280 temperature/humidity | ⚠️ Implemented, not yet hardware-validated |
 | 4b | DHT11 temperature/humidity *(not in the original spec)* | ✅ Working |
 
@@ -128,6 +128,22 @@ support monitor mode at all (`iw` fails with "Operation not supported")
 — if that's your situation, you need a genuine external USB adapter with
 a monitor-mode-capable chipset (confirmed working: RTL8192CU) rather than
 defaulting to the onboard adapter.
+
+> ⚠️ **Use a powered USB hub for the WiFi adapter.** Confirmed on real
+> hardware: a Pi 3B+ already running two USB-serial radar adapters plus a
+> USB webcam hit genuine under-voltage the moment a USB WiFi adapter was
+> plugged into the Pi's own ports — `vcgencmd get_throttled` showed the
+> under-voltage bit set, and `dmesg` logged repeated `Undervoltage
+> detected!` / USB bus re-enumeration. That reads as the WiFi module
+> randomly failing (`Network is down`, channel-hopping errors, adapters
+> disappearing and reappearing with a new device number) rather than an
+> obvious power problem, and cost real time to diagnose. If you're
+> running more than one or two USB peripherals on a Pi 3B+ (radar
+> adapters, camera, WiFi adapter), put the newer ones on a powered hub
+> instead of the Pi's own ports. If you ever see WiFi crowd-scan behaving
+> erratically, check `vcgencmd get_throttled` before suspecting the
+> plugin — a non-zero result (especially `0x50000` or similar) means the
+> Pi itself is browning out, not a Tally bug.
 
 ## What's new in v0.4.0
 
@@ -358,6 +374,9 @@ flip it before deploying anywhere you don't fully control access to.
 - Falcon Player (FPP) 9.x or 10.x+
 - Raspberry Pi 3B+ or compatible
 - Python 3 with `pyserial`, `paho-mqtt` (installed automatically)
+- A **powered USB hub** if you're running a USB WiFi adapter (Option 3b)
+  alongside other USB peripherals (radar serial adapters, camera) — see
+  "Enabling WiFi crowd scanning" above for why this isn't optional.
 
 ## License
 
