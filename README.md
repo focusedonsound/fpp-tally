@@ -14,7 +14,7 @@ FPP playlists/effects live in response to traffic.
 | 3a | Onboard Bluetooth (BLE crowd/device estimate) | ✅ Working |
 | 3b | Second USB WiFi adapter (monitor-mode crowd estimate) | ⚠️ Implemented, needs elevated daemon privileges — see below |
 | 4 | BME280 temperature/humidity | ⚠️ Implemented, not yet hardware-validated |
-| 4b | DHT11 temperature/humidity *(not in the original spec)* | ⚠️ Implemented, not yet hardware-validated |
+| 4b | DHT11 temperature/humidity *(not in the original spec)* | ✅ Working |
 
 Options 1 and 2 are not mutually exclusive — run either alone, or both for a
 full entrance+driveway picture. Every module is independently enabled from
@@ -136,10 +136,51 @@ matches your actual sensor. Not yet validated against a real DHT11 — the
 reads regularly fail transiently; that's normal for the protocol, not a
 fault condition) are unit-tested against a fake sensor object.
 
-What's left before a 1.0: hardware validation of thermal/BME280/DHT11/WiFi
-against real sensors, and the hidden calibration route's real-camera
-validation (currently only tested against the capture-failure path, no
-camera connected yet).
+## What's new in v0.6.0 — first real-hardware validation pass
+
+Tested live on a real Raspberry Pi 3B+ (192.168.0.51) running alongside a
+production `fpp-sled-mailbox` install using the same two LD2410B radars —
+not a synthetic/container test. This is where "implemented" became
+"working" for several modules, and surfaced two real bugs neither
+container testing nor unit tests had caught:
+
+- **LD2410B (Option 1): confirmed working against real radar hardware.**
+  Found and fixed a real bug in the process: a car sitting parked longer
+  than `parked_timeout_s` produced a fresh "parked" event on almost every
+  ~1s poll cycle for as long as it stayed put, instead of exactly once —
+  44 duplicate rows in under 90 seconds during testing. Root cause:
+  `on_presence()` was unconditionally clearing the "already fired" latch
+  on every poll where the radar reported presence, not just on the rising
+  edge. Fixed, and locked in with a regression test (400 simulated seconds
+  of continuous presence now correctly produces exactly one event).
+- **BLE crowd-scan (Option 3a): confirmed working.** First real scan on
+  the Pi's onboard Bluetooth found 12 unique nearby devices.
+- **DHT11 (Option 4b, not in the original spec): confirmed working.**
+  Real reading: 74.5°F / 55% humidity on GPIO4.
+- **Calibration camera capture: confirmed working end-to-end** with a USB
+  webcam — real 1920×1080 JPEG captured through the full activate →
+  session-gated snapshot → HTTP pipeline.
+- **Two real installer bugs found and fixed**, both invisible to
+  container-based testing (which had no unprivileged web-server user to
+  expose them): `tally.json` and the plugin's own log file were left
+  `root:root` after install, so the Setup page's Save button and the
+  daemon's own file-based logging would silently fail on a real FPP
+  install. Confirmed by hitting the actual `PermissionError` through the
+  real Setup page, not just inspecting file modes. Also worth noting:
+  `hdmi_cec.json` and `sled.json` on the same real Pi were already
+  correctly owned despite neither of those plugins' install scripts doing
+  this chown either — almost certainly hand-fixed via SSH at some point
+  rather than fixed at the source, suggesting the same gap likely exists
+  in those install scripts too.
+- Confirmed the SLED/Tally serial-port coexistence plan works safely in
+  practice: stopped SLED, ran Tally's LD2410B module against the freed
+  ports, stopped Tally, restarted SLED — verified fully healthy afterward
+  (both radars reopened cleanly, MQTT reconnected, no errors).
+
+What's left before a 1.0: hardware validation of thermal/BME280/WiFi
+crowd-scan against real sensors (no MLX90640, no second monitor-mode WiFi
+adapter available during this pass), and the registration/licensing
+backend's premium-tier logic once that's actually defined.
 
 ## Installation
 
