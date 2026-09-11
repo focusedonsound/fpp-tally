@@ -79,8 +79,24 @@ def _u16le(b: bytes, i: int) -> int:
     return int(b[i]) | (int(b[i + 1]) << 8)
 
 
+_MAX_REPORT_DATA_LEN = 64  # generous ceiling; real frames run ~35-40
+
+
 def extract_report_frames(buf: bytearray) -> List[bytes]:
-    """Extract and remove all complete data frames from buf. Returns raw frame bytes."""
+    """Extract and remove all complete data frames from buf. Returns raw frame bytes.
+
+    Frame boundaries are found via the declared length field (bytes 4-5,
+    right after the header: "F4 F3 F2 F1 [len u16le] [type] [payload]
+    F8 F7 F6 F5" per the protocol reference above), not by searching for
+    the next literal footer match. Confirmed on real hardware this
+    matters: the same USB-serial bit-7 parity corruption already worked
+    around in _cfg_ack() also occasionally flips a bit in the footer
+    bytes, and a naive `buf.find(FTR_RPT, ...)` search then skips right
+    past the corrupted footer and keeps scanning until it finds the
+    *next* frame's footer instead -- silently merging two real frames
+    into one oversized, unparseable blob. Trusting the length field
+    instead means one corrupted footer byte no longer corrupts frame
+    boundary detection for anything after it."""
     frames: List[bytes] = []
     while True:
         start = buf.find(HDR_RPT)
@@ -90,18 +106,48 @@ def extract_report_frames(buf: bytearray) -> List[bytes]:
             break
         if start > 0:
             del buf[:start]
-        end = buf.find(FTR_RPT, 4)
-        if end < 0:
-            break
-        end += len(FTR_RPT)
-        frames.append(bytes(buf[:end]))
-        del buf[:end]
+
+        if len(buf) < 6:
+            break  # need header(4) + length(2) before we know the frame size
+
+        # Bit-7 masked on both length bytes -- confirmed on real hardware
+        # the same USB-serial parity corruption hits the length field
+        # itself, not just report_type/status/footer (observed 0x23
+        # arriving as 0xa3). Safe to mask unconditionally: every real
+        # frame this protocol produces is well under 64 bytes, so the
+        # true length never legitimately sets bit 7 on either byte.
+        data_len = (buf[4] & 0x7F) | ((buf[5] & 0x7F) << 8)
+        if data_len > _MAX_REPORT_DATA_LEN:
+            # Implausible length -- the "header" bytes we matched were
+            # noise, not a real frame start. Drop just the header and
+            # resync on the next occurrence rather than stalling forever
+            # waiting for a frame that will never be that long.
+            del buf[:4]
+            continue
+
+        total_needed = 4 + 2 + data_len + 4
+        if len(buf) < total_needed:
+            break  # wait for more bytes
+
+        frames.append(bytes(buf[:total_needed]))
+        del buf[:total_needed]
     return frames
 
 
 def decode_report_frame(frame: bytes) -> Optional[Ld2410Report]:
     """Parse a basic (non-engineering) data frame. Returns Ld2410Report or None."""
-    if not (frame.startswith(HDR_RPT) and frame.endswith(FTR_RPT)):
+    # No footer content check here -- confirmed on real hardware the
+    # USB-serial corruption that hits report_type/status/the length
+    # field isn't confined to bit 7 (one captured footer differed by bit
+    # 3 instead), so any fixed-bit-mask tolerance still rejects some
+    # genuinely good frames. Framing is already authoritative from the
+    # declared length field (extract_report_frames), and the field
+    # plausibility bounds below are the real defense against garbage
+    # slipping through -- the footer bytes were never load-bearing once
+    # both of those are in place. Header match is still worth keeping;
+    # it's how extract_report_frames found this frame in the first
+    # place, and staying defensive costs nothing.
+    if not frame.startswith(HDR_RPT):
         return None
     body = frame[4:-4]
     if len(body) < 6:
@@ -118,7 +164,13 @@ def decode_report_frame(frame: bytes) -> Optional[Ld2410Report]:
     j = offset + 1
     if j >= len(body):
         return None
-    status = body[j]
+    # Bit-7 masked -- confirmed on real hardware the same USB-serial
+    # parity corruption _cfg_ack() already works around also occasionally
+    # flips this byte (observed target_status arriving as 0x82 instead of
+    # 0x02). Legitimate values are only 0x00-0x03, so bit 7 is never
+    # real data here -- safe to mask unconditionally, unlike the energy/
+    # distance fields below which legitimately use the full byte range.
+    status = body[j] & 0x7F
     j += 1
 
     if j + 9 > len(body):
@@ -153,13 +205,22 @@ def decode_eng_frame(frame: bytes) -> Optional[Ld2410EngReport]:
     actually an engineering-type frame (report_type != 0x01) or is too
     short -- callers should fall back to decode_report_frame() in that
     case, same as SLED's own daemon does."""
-    if not (frame.startswith(HDR_RPT) and frame.endswith(FTR_RPT)):
+    # See decode_report_frame's matching comment for why there's no
+    # footer content check here.
+    if not frame.startswith(HDR_RPT):
         return None
     body = frame[4:-4]
 
     if len(body) < 3:
         return None
-    report_type = body[2]
+    # Bit-7 masked -- same known USB-serial parity corruption as status
+    # below (confirmed on real hardware: a genuine 0x01 engineering-type
+    # byte was observed arriving as 0x81). Without this mask, a perfectly
+    # good engineering frame silently fails this check and falls back to
+    # decode_report_frame() every time it happens -- which is exactly
+    # the "negotiated engineering mode... but came back in basic format"
+    # symptom that motivated this fix.
+    report_type = body[2] & 0x7F
 
     offset = 3
     while offset < len(body):
@@ -173,7 +234,9 @@ def decode_eng_frame(frame: bytes) -> Optional[Ld2410EngReport]:
     if j + 2 + NUM_GATES + NUM_GATES > len(body):
         return None
 
-    status = body[j]
+    # See decode_report_frame's matching comment -- legitimate range is
+    # 0x00-0x03, bit 7 is never real data.
+    status = body[j] & 0x7F
     j += 1
 
     if j + 8 > len(body):
