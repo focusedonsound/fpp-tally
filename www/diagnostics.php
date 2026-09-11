@@ -44,12 +44,31 @@ ini_set('display_errors', '0');
 .diag-cam-frame img { max-width: 100%; display: block; }
 .diag-cam-auth input[type=password] { width: 100%; padding: .5rem; margin: .5rem 0; background: rgba(255,255,255,0.06); border: 1px solid #555; color: inherit; border-radius: 4px; }
 #diagThermalCanvas { border: 1px solid rgba(255,255,255,0.12); border-radius: .3rem; image-rendering: pixelated; }
-.diag-lane-road { display: flex; gap: 4px; border: 2px solid rgba(255,255,255,0.15); border-radius: .3rem; overflow: hidden; height: 90px; }
-.diag-lane { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .3rem; background: rgba(255,255,255,0.04); transition: background .2s ease; position: relative; }
-.diag-lane.occupied { background: rgba(54,162,235,0.35); }
-.diag-lane-label { font-size: .75rem; color: #999; text-transform: uppercase; letter-spacing: .04em; }
-.diag-lane-status { font-size: 1rem; font-weight: 700; }
-.diag-lane-mailbox { position: absolute; left: -1px; top: 0; bottom: 0; width: 4px; background: #d9822b; }
+.diag-lane-road {
+  position: relative; height: 130px; border-radius: .4rem; overflow: hidden;
+  border: 2px solid rgba(255,255,255,0.15);
+  background: repeating-linear-gradient(180deg, #3d3d3d 0 2px, #454545 2px 4px), linear-gradient(#454545, #3a3a3a);
+}
+.diag-lane-half { position: absolute; top: 0; bottom: 0; transition: background-color .2s ease; display: flex; align-items: flex-end; justify-content: center; padding-bottom: .4rem; }
+.diag-lane-half.occupied { background-color: rgba(54,162,235,0.28); }
+.diag-lane-half .diag-lane-status { font-size: .75rem; font-weight: 700; color: #cfe8ff; text-shadow: 0 1px 2px rgba(0,0,0,0.6); }
+.diag-lane-near { left: 0; }
+.diag-lane-far { right: 0; }
+.diag-lane-divider {
+  position: absolute; top: 0; bottom: 0; width: 0;
+  border-left: 3px dashed #f0c419; opacity: .9; z-index: 2;
+  transition: left .2s ease;
+}
+.diag-lane-mailbox {
+  position: absolute; left: 6px; top: 50%; transform: translateY(-50%);
+  font-size: 1.5rem; z-index: 3; filter: drop-shadow(0 1px 2px rgba(0,0,0,.6));
+}
+.diag-lane-car {
+  position: absolute; top: 50%; font-size: 1.7rem; z-index: 4;
+  transform: translate(-50%, -50%); transition: left .5s ease, opacity .3s ease;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,.6));
+}
+.diag-lane-labelrow { display: flex; justify-content: space-between; font-size: .7rem; color: #888; margin-top: .35rem; text-transform: uppercase; letter-spacing: .04em; }
 .diag-lane-gates { display: flex; gap: 2px; margin-top: .75rem; }
 .diag-lane-gate { width: 100%; height: 10px; border-radius: 2px; background: rgba(255,255,255,0.1); }
 .diag-lastpass { font-size: .85rem; margin-top: .6rem; }
@@ -73,15 +92,19 @@ ini_set('display_errors', '0');
     This is a display split only, not used for detection or triggers.
   </p>
   <div class="diag-lane-road" id="diagLaneRoad">
-    <div class="diag-lane" id="diagLaneNear">
-      <div class="diag-lane-mailbox" title="Mailbox / sensor position"></div>
-      <span class="diag-lane-label">Near lane</span>
-      <span class="diag-lane-status" id="diagLaneNearStatus">Clear</span>
+    <div class="diag-lane-mailbox" title="Mailbox / sensor position">📫</div>
+    <div class="diag-lane-divider" id="diagLaneDivider"></div>
+    <div class="diag-lane-half diag-lane-near" id="diagLaneNear">
+      <span class="diag-lane-status" id="diagLaneNearStatus"></span>
     </div>
-    <div class="diag-lane" id="diagLaneFar">
-      <span class="diag-lane-label">Far lane</span>
-      <span class="diag-lane-status" id="diagLaneFarStatus">Clear</span>
+    <div class="diag-lane-half diag-lane-far" id="diagLaneFar">
+      <span class="diag-lane-status" id="diagLaneFarStatus"></span>
     </div>
+    <div class="diag-lane-car" id="diagLaneCar" style="left:0%; opacity:0;">🚗</div>
+  </div>
+  <div class="diag-lane-labelrow">
+    <span>Near lane — leaving</span>
+    <span>Far lane — incoming</span>
   </div>
   <div class="diag-lane-gates" id="diagLaneGates"></div>
   <div class="d-flex align-items-center gap-2 flex-wrap mt-2">
@@ -515,6 +538,11 @@ function diagRenderLane(ld2410Data, threshold) {
   if (!ld2410Data || (!ld2410Data.A?.connected && !ld2410Data.B?.connected)) {
     road.style.opacity = '0.4';
     document.getElementById('diagLaneGates').innerHTML = '';
+    document.getElementById('diagLaneCar').style.opacity = '0';
+    document.getElementById('diagLaneNear').classList.remove('occupied');
+    document.getElementById('diagLaneFar').classList.remove('occupied');
+    document.getElementById('diagLaneNearStatus').textContent = '';
+    document.getElementById('diagLaneFarStatus').textContent = '';
     return;
   }
   road.style.opacity = '1';
@@ -538,12 +566,39 @@ function diagRenderLane(ld2410Data, threshold) {
   const nearOccupied = combined.slice(0, split).some(e => e >= threshold);
   const farOccupied = combined.slice(split).some(e => e >= threshold);
 
+  // Road graphic: gate 0 sits at the mailbox (left edge), gate 8 at the
+  // far edge -- the divider and the two lane widths are placed
+  // proportionally along that same axis, so "near lane" / "far lane"
+  // visually line up with the actual gate numbers underneath instead of
+  // being an arbitrary 50/50 split.
+  const dividerPct = (split / DIAG_NUM_GATES) * 100;
+  document.getElementById('diagLaneDivider').style.left = dividerPct + '%';
   const nearEl = document.getElementById('diagLaneNear');
   const farEl = document.getElementById('diagLaneFar');
+  nearEl.style.left = '0%';
+  nearEl.style.width = dividerPct + '%';
+  farEl.style.left = dividerPct + '%';
+  farEl.style.width = (100 - dividerPct) + '%';
   nearEl.classList.toggle('occupied', nearOccupied);
   farEl.classList.toggle('occupied', farOccupied);
-  document.getElementById('diagLaneNearStatus').textContent = nearOccupied ? 'Vehicle' : 'Clear';
-  document.getElementById('diagLaneFarStatus').textContent = farOccupied ? 'Vehicle' : 'Clear';
+  document.getElementById('diagLaneNearStatus').textContent = nearOccupied ? 'Vehicle' : '';
+  document.getElementById('diagLaneFarStatus').textContent = farOccupied ? 'Vehicle' : '';
+
+  // Car marker: placed at whichever single gate currently reads
+  // strongest (same gate the "•" marker on the readout above points at),
+  // only shown while something is actually above threshold somewhere.
+  const carEl = document.getElementById('diagLaneCar');
+  let peakGate = -1, peakVal = -1;
+  for (let g = 0; g < DIAG_NUM_GATES; g++) {
+    if (combined[g] > peakVal) { peakVal = combined[g]; peakGate = g; }
+  }
+  if (peakVal >= threshold && peakGate >= 0) {
+    const carPct = ((peakGate + 0.5) / DIAG_NUM_GATES) * 100;
+    carEl.style.left = carPct + '%';
+    carEl.style.opacity = '1';
+  } else {
+    carEl.style.opacity = '0';
+  }
 
   // Small gate strip under the lanes -- same combined data, just a
   // compact reference so the lane split is visibly tied to real gate
