@@ -438,12 +438,8 @@ def ld2410_disable_eng(ser) -> bool:
 # something re-sent on every connect.
 # =============================================================================
 
-def ld2410_read_gate_config(ser) -> Optional[dict]:
-    """Read the radar's current per-gate sensitivity configuration
-    (command 0x0061). Returns None on failure. Radar must already be in
-    config mode.
-
-    Byte layout of the ACK payload (as returned by _read_cfg_response,
+def _read_gate_config_once(ser) -> Optional[dict]:
+    """Byte layout of the ACK payload (as returned by _read_cfg_response,
     i.e. starting right after the length field): cmd echo(2) + status(2)
     + 0xAA head marker(1) + max_distance_gate(1) + configured max moving
     gate(1) + configured max static gate(1) + motion sensitivity per
@@ -475,13 +471,33 @@ def ld2410_read_gate_config(ser) -> Optional[dict]:
     }
 
 
-def ld2410_set_gate_sensitivity(ser, gate: int, motion_sensitivity: int, static_sensitivity: int) -> bool:
-    """Configure sensitivity (0-100, higher = less sensitive -- the
-    radar only reports a target once its energy exceeds this value) for
-    one gate, or every gate at once if gate == 0xFFFF (command 0x0064).
-    Radar must already be in config mode.
+def ld2410_read_gate_config(ser) -> Optional[dict]:
+    """Read the radar's current per-gate sensitivity configuration
+    (command 0x0061). Returns None on failure. Radar must already be in
+    config mode.
 
-    Command value layout: gate word(2, always 0x0000) + gate value
+    Retries up to 3 times (same count and reasoning as
+    ld2410_enter_config's own retry loop): confirmed on real hardware
+    this single request/response round trip fails intermittently in ways
+    bit-7 masking can't fix -- a genuine timeout (no response at all
+    within the read deadline) and a truncated/short response were both
+    observed in back-to-back attempts, distinct from the "arrived but
+    with a corrupted bit" case the masking above handles. Both are
+    exactly the kind of one-off comm glitch a retry resolves."""
+    for attempt in range(3):
+        cfg = _read_gate_config_once(ser)
+        if cfg is not None:
+            return cfg
+        time.sleep(0.15)
+        try:
+            ser.reset_input_buffer()
+        except Exception:
+            pass
+    return None
+
+
+def _set_gate_sensitivity_once(ser, gate: int, motion_sensitivity: int, static_sensitivity: int) -> bool:
+    """Command value layout: gate word(2, always 0x0000) + gate value
     u32le(4) + motion sensitivity word(2, always 0x0001) + motion
     sensitivity value u32le(4) + static sensitivity word(2, always
     0x0002) + static sensitivity value u32le(4)."""
@@ -493,3 +509,26 @@ def ld2410_set_gate_sensitivity(ser, gate: int, motion_sensitivity: int, static_
     ser.write(_pack_cfg_frame(0x0064, params))
     rsp = _read_cfg_response(ser)
     return _cfg_ack(rsp)
+
+
+def ld2410_set_gate_sensitivity(ser, gate: int, motion_sensitivity: int, static_sensitivity: int) -> bool:
+    """Configure sensitivity (0-100, higher = less sensitive -- the
+    radar only reports a target once its energy exceeds this value) for
+    one gate, or every gate at once if gate == 0xFFFF (command 0x0064).
+    Radar must already be in config mode.
+
+    Retries up to 3 times -- same reasoning as ld2410_read_gate_config:
+    confirmed on real hardware this class of config-mode round trip
+    (distinct from the continuous data-frame stream) fails outright
+    intermittently (timeout, truncated response), which only a retry
+    fixes. Writing a real setting to the radar's persistent memory makes
+    a false failure here worse than most -- worth the extra attempts."""
+    for attempt in range(3):
+        if _set_gate_sensitivity_once(ser, gate, motion_sensitivity, static_sensitivity):
+            return True
+        time.sleep(0.15)
+        try:
+            ser.reset_input_buffer()
+        except Exception:
+            pass
+    return False
