@@ -79,7 +79,20 @@ def _u16le(b: bytes, i: int) -> int:
     return int(b[i]) | (int(b[i + 1]) << 8)
 
 
-_MAX_REPORT_DATA_LEN = 64  # generous ceiling; real frames run ~35-40
+
+# The ONLY two data-length values a real report frame from this 9-gate
+# sensor ever declares -- confirmed against the manufacturer's own
+# protocol document (HLK-LD2410 Serial Communication Protocol V1.02,
+# Table 8/9/11/13's worked examples): 13 for a basic-mode frame, 35 for
+# an engineering-mode frame. Deliberately exact, not a loose ceiling:
+# confirmed on real hardware that length-field corruption isn't always a
+# clean single-bit flip (one captured example had 0x23 corrupted to
+# 0x93 -- three bits differ, not one), so a generous range still let
+# obviously-bogus lengths through and produced a "frame" with no real
+# footer at the end of it. Any other declared length means the header
+# match was noise or the length byte(s) got mangled -- either way, not
+# a real frame worth trying to parse.
+_VALID_REPORT_DATA_LENS = (13, 35)
 
 
 def extract_report_frames(buf: bytearray) -> List[bytes]:
@@ -116,12 +129,21 @@ def extract_report_frames(buf: bytearray) -> List[bytes]:
         # arriving as 0xa3). Safe to mask unconditionally: every real
         # frame this protocol produces is well under 64 bytes, so the
         # true length never legitimately sets bit 7 on either byte.
+        # Masking recovers a single-bit-7 corruption (0xa3 -> 0x23), but
+        # not every corruption is that clean -- confirmed on real
+        # hardware a length byte can have multiple bits wrong at once
+        # (0x23 corrupted to 0x93, three bits differ), which masking
+        # alone turns into a different-but-still-wrong value (19) that a
+        # loose ceiling would have waved through. The exact-value check
+        # below is the real defense; masking is just a first pass that
+        # catches the common case cheaply.
         data_len = (buf[4] & 0x7F) | ((buf[5] & 0x7F) << 8)
-        if data_len > _MAX_REPORT_DATA_LEN:
-            # Implausible length -- the "header" bytes we matched were
-            # noise, not a real frame start. Drop just the header and
-            # resync on the next occurrence rather than stalling forever
-            # waiting for a frame that will never be that long.
+        if data_len not in _VALID_REPORT_DATA_LENS:
+            # Not a length this protocol ever legitimately produces --
+            # the "header" bytes we matched were noise, or the length
+            # field is corrupted beyond what bit-7 masking recovers.
+            # Drop just the header and resync on the next occurrence
+            # rather than accepting a frame that was never real.
             del buf[:4]
             continue
 
