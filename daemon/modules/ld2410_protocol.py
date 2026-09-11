@@ -421,3 +421,65 @@ def ld2410_disable_eng(ser) -> bool:
     ser.write(_pack_cfg_frame(0x0063))
     rsp = _read_cfg_response(ser)
     return _cfg_ack(rsp)
+
+
+# =============================================================================
+# Per-gate sensitivity -- the same native radar feature the official HLK
+# config tool exposes, not something layered on top in software. This
+# is a real threshold the radar's own firmware applies when deciding
+# target_status for each frame (per the manufacturer protocol doc,
+# sections 2.2.4 and 2.2.7): "Only when the detected target energy value
+# (range 0-100) is greater than the sensitivity value will it be
+# determined that the target exists." Setting per-gate sensitivity here
+# filters at the source, before data ever reaches Tally -- stronger than
+# any single min_energy threshold applied after the fact in ld2410.py,
+# and (per the doc) persists in the radar's own memory across power
+# cycles, so this is a deliberate one-time-per-adjustment action, not
+# something re-sent on every connect.
+# =============================================================================
+
+def ld2410_read_gate_config(ser) -> Optional[dict]:
+    """Read the radar's current per-gate sensitivity configuration
+    (command 0x0061). Returns None on failure. Radar must already be in
+    config mode.
+
+    Byte layout of the ACK payload (as returned by _read_cfg_response,
+    i.e. starting right after the length field): cmd echo(2) + status(2)
+    + 0xAA head marker(1) + max_distance_gate(1) + configured max moving
+    gate(1) + configured max static gate(1) + motion sensitivity per
+    gate 0-8(9) + static sensitivity per gate 0-8(9) + no-person
+    duration seconds, u16le(2)."""
+    ser.write(_pack_cfg_frame(0x0061))
+    payload = _read_cfg_response(ser)
+    if payload is None or len(payload) < 28:
+        return None
+    if (payload[2] & 0x7F) != 0 or (payload[3] & 0x7F) != 0:
+        return None  # ACK status != success
+    return {
+        "max_distance_gate": payload[5],
+        "configured_max_moving_gate": payload[6],
+        "configured_max_static_gate": payload[7],
+        "motion_sensitivity": list(payload[8:17]),
+        "static_sensitivity": list(payload[17:26]),
+        "no_person_duration_s": payload[26] | (payload[27] << 8),
+    }
+
+
+def ld2410_set_gate_sensitivity(ser, gate: int, motion_sensitivity: int, static_sensitivity: int) -> bool:
+    """Configure sensitivity (0-100, higher = less sensitive -- the
+    radar only reports a target once its energy exceeds this value) for
+    one gate, or every gate at once if gate == 0xFFFF (command 0x0064).
+    Radar must already be in config mode.
+
+    Command value layout: gate word(2, always 0x0000) + gate value
+    u32le(4) + motion sensitivity word(2, always 0x0001) + motion
+    sensitivity value u32le(4) + static sensitivity word(2, always
+    0x0002) + static sensitivity value u32le(4)."""
+    params = (
+        struct.pack("<H", 0x0000) + struct.pack("<I", gate)
+        + struct.pack("<H", 0x0001) + struct.pack("<I", motion_sensitivity)
+        + struct.pack("<H", 0x0002) + struct.pack("<I", static_sensitivity)
+    )
+    ser.write(_pack_cfg_frame(0x0064, params))
+    rsp = _read_cfg_response(ser)
+    return _cfg_ack(rsp)

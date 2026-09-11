@@ -42,6 +42,13 @@ except ImportError:
 
 _STATE_DIR = "/home/fpp/media/plugins/fpp-tally/state"
 LIVE_STATE_FILE = os.path.join(_STATE_DIR, "ld2410_live.json")
+# Diagnostics page's per-gate sensitivity read/write request/response --
+# a request file written by diag_tune.php, handled inside this module's
+# own run loop (the only place that owns the live, already-open serial
+# connection -- a second connection attempt from elsewhere would
+# conflict with it) and answered via the response file.
+GATE_CMD_FILE = os.path.join(_STATE_DIR, "ld2410_gate_cmd.json")
+GATE_RESULT_FILE = os.path.join(_STATE_DIR, "ld2410_gate_result.json")
 
 # How long a reader can go without a single successfully-decoded report
 # before the module assumes the radar itself has gone quiet (not the USB
@@ -100,6 +107,45 @@ class _RadarReader:
             return ok
         except Exception as exc:
             self.log.debug("LD2410B %s: engineering-mode setup failed: %s", self.side, exc)
+            return False
+
+    def read_gate_config(self) -> Optional[dict]:
+        """Read the radar's current per-gate sensitivity, for the
+        Diagnostics page's gate-tuning UI to show real values instead of
+        letting a builder set numbers blind. Briefly interrupts normal
+        report streaming (config mode) -- fine for a rare, deliberate
+        user action, not something called on a schedule."""
+        if self._ser is None:
+            return None
+        try:
+            if not proto.ld2410_enter_config(self._ser):
+                return None
+            cfg = proto.ld2410_read_gate_config(self._ser)
+            proto.ld2410_exit_config(self._ser)
+            self._ser.reset_input_buffer()
+            return cfg
+        except Exception as exc:
+            self.log.warning("LD2410B %s: read gate config failed: %s", self.side, exc)
+            return None
+
+    def set_gate_sensitivity(self, gate: int, motion_sensitivity: int, static_sensitivity: int) -> bool:
+        """Write per-gate sensitivity to the radar's own persistent
+        memory (command 0x0064) -- the same native filtering the
+        official HLK config tool uses, applied at the sensor itself
+        rather than in software after the fact. Persists across power
+        cycles per the manufacturer protocol doc, so this is a
+        deliberate one-time action, never called automatically."""
+        if self._ser is None:
+            return False
+        try:
+            if not proto.ld2410_enter_config(self._ser):
+                return False
+            ok = proto.ld2410_set_gate_sensitivity(self._ser, gate, motion_sensitivity, static_sensitivity)
+            proto.ld2410_exit_config(self._ser)
+            self._ser.reset_input_buffer()
+            return ok
+        except Exception as exc:
+            self.log.warning("LD2410B %s: set gate sensitivity failed: %s", self.side, exc)
             return False
 
     def close(self) -> None:
@@ -267,6 +313,66 @@ def _report_to_dict(reader: _RadarReader) -> dict:
     return base
 
 
+def _write_gate_result(payload: dict) -> None:
+    try:
+        os.makedirs(_STATE_DIR, exist_ok=True)
+        tmp = GATE_RESULT_FILE + ".tmp"
+        payload.setdefault("ts", time.time())
+        with open(tmp, "w") as f:
+            json.dump(payload, f)
+        os.replace(tmp, GATE_RESULT_FILE)
+    except Exception:
+        pass
+
+
+def _handle_gate_cmd_request(reader_a: "_RadarReader", reader_b: "_RadarReader", log) -> None:
+    """Services one pending per-gate sensitivity read/write request from
+    the Diagnostics page (see GATE_CMD_FILE). Checked every loop tick --
+    cheap (one os.path.isfile call) in the overwhelmingly common case
+    where no request is pending; only does real work, briefly pausing
+    that side's report streaming for the config-mode round trip, when a
+    builder has actually asked for one. One-shot: the request file is
+    removed immediately so a slow response can't cause it to be
+    processed twice."""
+    if not os.path.isfile(GATE_CMD_FILE):
+        return
+    try:
+        with open(GATE_CMD_FILE) as f:
+            req = json.load(f)
+        os.unlink(GATE_CMD_FILE)
+    except Exception as exc:
+        log.warning("[GateCmd] failed to read request: %s", exc)
+        return
+
+    side = req.get("side")
+    reader = reader_a if side == "A" else reader_b if side == "B" else None
+    if reader is None or reader._ser is None:
+        _write_gate_result({"ok": False, "side": side, "message": f"Side {side} not connected"})
+        return
+
+    action = req.get("action")
+    if action == "read":
+        cfg = reader.read_gate_config()
+        if cfg is None:
+            _write_gate_result({"ok": False, "side": side, "message": "Read failed — check the connection and try again"})
+        else:
+            _write_gate_result({"ok": True, "side": side, "action": "read", **cfg})
+        log.info("[GateCmd] %s: read gate config -> %s", side, "ok" if cfg else "failed")
+    elif action == "write":
+        gate = int(req.get("gate", 0xFFFF))
+        motion = int(req.get("motion", 0))
+        static = int(req.get("static", 0))
+        ok = reader.set_gate_sensitivity(gate, motion, static)
+        _write_gate_result({
+            "ok": ok, "side": side, "action": "write", "gate": gate,
+            "motion": motion, "static": static,
+            "message": "Saved to the radar's own memory" if ok else "Write failed — check the connection and try again",
+        })
+        log.info("[GateCmd] %s: set gate=%s motion=%d static=%d -> %s", side, gate, motion, static, "ok" if ok else "failed")
+    else:
+        _write_gate_result({"ok": False, "side": side, "message": f"Unknown action {action!r}"})
+
+
 class LD2410Module(SensorModule):
     name = "ld2410"
 
@@ -331,6 +437,8 @@ class LD2410Module(SensorModule):
 
         while not self._stop.is_set():
             now = time.time()
+
+            _handle_gate_cmd_request(reader_a, reader_b, self.log)
 
             for side, reader, parked in (("A", reader_a, parked_a), ("B", reader_b, parked_b)):
                 if reader._ser is None:

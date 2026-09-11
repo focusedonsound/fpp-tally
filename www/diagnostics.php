@@ -53,6 +53,10 @@ ini_set('display_errors', '0');
 .diag-lane-gates { display: flex; gap: 2px; margin-top: .75rem; }
 .diag-lane-gate { width: 100%; height: 10px; border-radius: 2px; background: rgba(255,255,255,0.1); }
 .diag-lastpass { font-size: .85rem; margin-top: .6rem; }
+.diag-gatesens-table { width: 100%; font-size: .85rem; border-collapse: collapse; }
+.diag-gatesens-table th { text-align: left; font-weight: 600; color: #999; padding: .3rem .5rem; border-bottom: 1px solid rgba(255,255,255,0.15); }
+.diag-gatesens-table td { padding: .25rem .5rem; border-bottom: 1px solid rgba(255,255,255,0.06); vertical-align: middle; }
+.diag-gatesens-table input { width: 5rem; }
 </style>
 
 <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
@@ -128,11 +132,11 @@ ini_set('display_errors', '0');
           <span class="small" id="diagMinEnergyStatus"></span>
         </div>
         <div class="text-muted small mt-1">
-          The dashed line on each bar is this threshold. A gate crossing it (highlighted) is what the radar
-          currently treats as a real target for that reading — this is a <strong>single shared value</strong>,
-          applied to whichever gate reads highest, not a per-gate setting. Adjusting the number updates the
-          line immediately so you can see the effect before saving; <strong>Save &amp; Apply</strong> writes it
-          to the config and restarts the daemon so real detection actually uses it.
+          The dashed line on each bar is this threshold. A gate crossing it (highlighted) is what Tally's own
+          software applies on top of whichever gate reads highest, in addition to (not instead of) the radar's
+          own native per-gate sensitivity below. Adjusting the number updates the line immediately so you can
+          see the effect before saving; <strong>Save &amp; Apply</strong> writes it to the config and restarts
+          the daemon so real detection actually uses it.
         </div>
       </div>
       <div id="diagLd2410Body" class="row g-4">
@@ -140,6 +144,29 @@ ini_set('display_errors', '0');
       </div>
     </div>
   </div>
+</div>
+
+<div class="tally-card" id="diagGateSensCard">
+  <h4><i class="fas fa-fw fa-sliders"></i> Per-Gate Sensitivity (native radar filtering)</h4>
+  <p class="text-muted small mb-2">
+    This is the same per-gate sensitivity the official HLK config tool exposes — a real setting written to
+    the radar's own memory (persists across power cycles), applied by the radar itself before Tally ever sees
+    the data. Higher sensitivity number = <strong>less</strong> sensitive (a gate's energy has to clear that
+    number before the radar reports a target there at all) — useful for silencing a specific gate that keeps
+    picking up wind-blown branches or a neighbor's fixture, without dialing back detection everywhere.
+  </p>
+  <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
+    <label class="small text-muted mb-0">Side</label>
+    <select id="diagGateSensSide" class="form-control form-control-sm" style="width:6rem;" onchange="diagGateSensClear()">
+      <option value="A">A</option>
+      <option value="B">B</option>
+    </select>
+    <button type="button" class="tally-btn tally-btn-sm" onclick="diagReadGateSens()">
+      <i class="fas fa-arrows-rotate"></i> Read Current Values
+    </button>
+    <span class="small" id="diagGateSensStatus"></span>
+  </div>
+  <div id="diagGateSensBody" class="text-muted small">Click "Read Current Values" to load this side's current per-gate sensitivity from the radar.</div>
 </div>
 
 <div class="tally-card" id="diagThermalCard">
@@ -567,6 +594,73 @@ async function diagSaveLaneSplit() {
     await fetch('plugin.php?plugin=fpp-tally&page=www/control.php&nopage=1', { method: 'POST', body: fd2, cache: 'no-store' });
     statusEl.textContent = 'Applied.';
     setTimeout(() => { statusEl.textContent = ''; }, 4000);
+  } catch (e) {
+    statusEl.textContent = 'Request failed.';
+  }
+}
+
+// --- Per-gate native sensitivity ------------------------------------------
+function diagGateSensClear() {
+  document.getElementById('diagGateSensBody').innerHTML =
+    '<div class="text-muted small">Click "Read Current Values" to load this side\'s current per-gate sensitivity from the radar.</div>';
+  document.getElementById('diagGateSensStatus').textContent = '';
+}
+
+function diagRenderGateSensTable(motionVals, staticVals) {
+  let html = '<div style="overflow-x:auto;"><table class="diag-gatesens-table"><thead><tr>' +
+    '<th>Gate</th><th>Range</th><th>Motion sensitivity</th><th>Static sensitivity</th><th></th>' +
+    '</tr></thead><tbody>';
+  for (let g = 0; g < DIAG_NUM_GATES; g++) {
+    const rangeM = (g * 0.75).toFixed(2) + '–' + ((g + 1) * 0.75).toFixed(2) + 'm';
+    html += `<tr>
+      <td>G${g}</td>
+      <td class="text-muted">${rangeM}</td>
+      <td><input type="number" min="0" max="100" value="${motionVals[g] ?? ''}" id="diagGateMotion${g}"></td>
+      <td><input type="number" min="0" max="100" value="${staticVals[g] ?? ''}" id="diagGateStatic${g}"></td>
+      <td><button type="button" class="tally-btn tally-btn-sm" onclick="diagSetGateSensitivity(${g})"><i class="fas fa-floppy-disk"></i> Set</button></td>
+    </tr>`;
+  }
+  html += '</tbody></table></div>';
+  document.getElementById('diagGateSensBody').innerHTML = html;
+}
+
+async function diagReadGateSens() {
+  const side = document.getElementById('diagGateSensSide').value;
+  const statusEl = document.getElementById('diagGateSensStatus');
+  statusEl.textContent = 'Reading from radar…';
+  try {
+    const fd = new FormData();
+    fd.append('action', 'read');
+    fd.append('side', side);
+    const res = await fetch('plugin.php?plugin=fpp-tally&page=www/diag_gates.php&nopage=1', { method: 'POST', body: fd, cache: 'no-store' });
+    const data = await res.json();
+    if (data.status !== 'OK') {
+      statusEl.textContent = 'Error: ' + (data.message || 'read failed');
+      return;
+    }
+    diagRenderGateSensTable(data.motion_sensitivity || [], data.static_sensitivity || []);
+    statusEl.textContent = 'Loaded from side ' + side + '.';
+  } catch (e) {
+    statusEl.textContent = 'Request failed.';
+  }
+}
+
+async function diagSetGateSensitivity(gate) {
+  const side = document.getElementById('diagGateSensSide').value;
+  const statusEl = document.getElementById('diagGateSensStatus');
+  const motion = document.getElementById('diagGateMotion' + gate).value;
+  const static_ = document.getElementById('diagGateStatic' + gate).value;
+  statusEl.textContent = `Writing gate ${gate}…`;
+  try {
+    const fd = new FormData();
+    fd.append('action', 'write');
+    fd.append('side', side);
+    fd.append('gate', gate);
+    fd.append('motion', motion);
+    fd.append('static', static_);
+    const res = await fetch('plugin.php?plugin=fpp-tally&page=www/diag_gates.php&nopage=1', { method: 'POST', body: fd, cache: 'no-store' });
+    const data = await res.json();
+    statusEl.textContent = data.status === 'OK' ? `Gate ${gate} saved.` : 'Error: ' + (data.message || 'write failed');
   } catch (e) {
     statusEl.textContent = 'Request failed.';
   }
