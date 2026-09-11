@@ -47,6 +47,32 @@ function diag_log($logFile, $msg) {
     @file_put_contents($logFile, "[" . date('Y-m-d H:i:s') . "] [diag-snapshot] {$msg}\n", FILE_APPEND | LOCK_EX);
 }
 
+// CSI (Raspberry Pi Camera Module) vs. USB webcam need different capture
+// tools entirely, not just a different device path -- found on real CSI
+// hardware (a Pi Camera Module 3): the raw /dev/videoN node only exposes
+// unprocessed Bayer data, and `ffmpeg -f v4l2` "succeeds" against it but
+// encodes that raw Bayer data as if it were normal YUV/RGB, producing a
+// solid green-tinted image instead of a real photo or a clean error --
+// exactly the "comes up as a green block" symptom seen on .49. This
+// mirrors daemon/modules/camera.py's own backend auto-detection, cached
+// to a file (detecting via `rpicam-hello --list-cameras` costs a few
+// hundred ms -- too slow to redo on every ~1.5s poll from the Diagnostics
+// page).
+function diag_detect_csi($cacheFile) {
+    $cached = @json_decode(@file_get_contents($cacheFile), true);
+    if (is_array($cached) && isset($cached['is_csi']) && (time() - ($cached['at'] ?? 0)) < 60) {
+        return (bool)$cached['is_csi'];
+    }
+    $helloBin = trim((string)(shell_exec('command -v rpicam-hello 2>/dev/null') ?: shell_exec('command -v libcamera-hello 2>/dev/null')));
+    $isCsi = false;
+    if ($helloBin !== '') {
+        $out = (string)shell_exec('timeout 5 ' . escapeshellarg($helloBin) . ' --list-cameras 2>&1');
+        $isCsi = (strpos($out, 'Available cameras') !== false && strpos($out, 'No cameras available') === false);
+    }
+    @file_put_contents($cacheFile, json_encode(['is_csi' => $isCsi, 'at' => time()]));
+    return $isCsi;
+}
+
 $cfg = diag_load_cfg($CONFIG_FILE);
 $calib = $cfg['calibration'] ?? [];
 $requirePassword = !empty($calib['require_password_on_diagnostics']);
@@ -149,8 +175,14 @@ if ($lockFp === false || !flock($lockFp, LOCK_EX | LOCK_NB)) {
 
 // One frame, no temp file. 5s timeout so a device that hangs (unplugged
 // mid-capture, bus error) fails fast instead of piling up slow requests.
-$cmd = 'timeout 5 ffmpeg -f v4l2 -i ' . escapeshellarg($device) .
-       ' -frames:v 1 -q:v 5 -f mjpeg -y - 2>/dev/null';
+$csiCacheFile = "/home/fpp/media/plugins/fpp-tally/state/camera_backend_detect.json";
+if (diag_detect_csi($csiCacheFile)) {
+    $stillBin = trim((string)(shell_exec('command -v rpicam-still 2>/dev/null') ?: shell_exec('command -v libcamera-still 2>/dev/null')));
+    $cmd = 'timeout 5 ' . escapeshellarg($stillBin ?: 'rpicam-still') . ' -t 300 -o - 2>/dev/null';
+} else {
+    $cmd = 'timeout 5 ffmpeg -f v4l2 -i ' . escapeshellarg($device) .
+           ' -frames:v 1 -q:v 5 -f mjpeg -y - 2>/dev/null';
+}
 $jpeg = shell_exec($cmd);
 
 flock($lockFp, LOCK_UN);
