@@ -89,6 +89,35 @@ if ($requirePassword && !diag_session_active($SESSION_FILE)) {
     exit;
 }
 
+// The camera module (daemon/modules/camera.py), when enabled, keeps one
+// persistent capture process open on this same device for as long as it
+// runs -- a V4L2/CSI device only tolerates one opener at a time, so this
+// endpoint's own cold-open ffmpeg calls started failing every single poll
+// the moment that module came up (confirmed on real hardware, .51: the
+// module holds the device exclusively and continuously, so every
+// independent open attempt here loses the race and errors out). Rather
+// than fight it for the device, serve its shared warm frame directly
+// whenever it's fresh enough to trust -- effectively instant, and no
+// second opener needed at all. Only falls back to the cold-open path
+// below when that module isn't running (not enabled, or its frame file
+// is missing/stale), preserving today's behavior for installs that don't
+// use it.
+$FRAME_FILE = "/home/fpp/media/plugins/fpp-tally/state/camera_frame.jpg";
+$FRAME_FILE_MAX_AGE_S = 5.0;
+$cameraModuleEnabled = !empty($cfg['modules']['camera']);
+if ($cameraModuleEnabled && file_exists($FRAME_FILE)) {
+    $age = time() - filemtime($FRAME_FILE);
+    if ($age <= $FRAME_FILE_MAX_AGE_S) {
+        $jpeg = @file_get_contents($FRAME_FILE);
+        if ($jpeg !== false && strlen($jpeg) >= 4 && substr($jpeg, 0, 2) === "\xFF\xD8") {
+            header('Content-Type: image/jpeg');
+            header('Cache-Control: no-store');
+            echo $jpeg;
+            exit;
+        }
+    }
+}
+
 $device = $calib['camera_device'] ?? '/dev/video0';
 if (!preg_match('#^/dev/[A-Za-z0-9_/-]+$#', $device)) {
     http_response_code(400);

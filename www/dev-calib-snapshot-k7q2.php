@@ -50,6 +50,25 @@ if (!calib_session_active($SESSION_FILE)) {
 }
 
 $cfg = calib_load_cfg($CONFIG_FILE);
+
+// Same reasoning as diag_snapshot.php's identical block: the camera
+// module, when enabled, holds this device open continuously, so serve its
+// shared warm frame instead of racing it for a second exclusive open.
+$FRAME_FILE = "/home/fpp/media/plugins/fpp-tally/state/camera_frame.jpg";
+$FRAME_FILE_MAX_AGE_S = 5.0;
+if (!empty($cfg['modules']['camera']) && file_exists($FRAME_FILE)) {
+    $age = time() - filemtime($FRAME_FILE);
+    if ($age <= $FRAME_FILE_MAX_AGE_S) {
+        $jpeg = @file_get_contents($FRAME_FILE);
+        if ($jpeg !== false && strlen($jpeg) >= 4 && substr($jpeg, 0, 2) === "\xFF\xD8") {
+            header('Content-Type: image/jpeg');
+            header('Cache-Control: no-store');
+            echo $jpeg;
+            exit;
+        }
+    }
+}
+
 $device = $cfg['calibration']['camera_device'] ?? '/dev/video0';
 if (!preg_match('#^/dev/[A-Za-z0-9_/-]+$#', $device)) {
     http_response_code(400);

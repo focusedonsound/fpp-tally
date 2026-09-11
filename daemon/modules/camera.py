@@ -72,6 +72,7 @@ stream stays open and continuously updated afterward.
 """
 from __future__ import annotations
 
+import collections
 import json
 import logging
 import os
@@ -112,6 +113,25 @@ _JPEG_EOI = b"\xff\xd9"
 # JPEG boundary (e.g. device hiccup mid-frame) -- drop back to the tail
 # rather than growing forever.
 _MAX_STREAM_BUFFER = 2_000_000
+
+# Shared warm-frame file: the Diagnostics page's camera preview
+# (www/diag_snapshot.php) used to cold-open its own ffmpeg on every poll,
+# which on real hardware (.51) turned out to actively fight this module's
+# persistent stream for exclusive access to the same USB device -- the two
+# were never designed to share it, and the preview started failing every
+# single poll the moment this module came up. Writing the latest frame
+# here lets diag_snapshot.php serve it directly instead of opening the
+# device a second time, whenever this module is running.
+FRAME_FILE = os.path.join(_STATE_DIR, "camera_frame.jpg")
+# How long a frame on disk is trusted as "the module is actively updating
+# this" before a reader should fall back to its own capture -- a few
+# multiples of the write cadence below, so one merely-slow cycle doesn't
+# look stale.
+FRAME_FILE_MAX_AGE_S = 5.0
+# How long the stream can run with zero frames captured before it's worth
+# a loud warning -- generous enough to cover the slowest real case seen
+# (CSI camera startup measured at ~6-7s), not just USB.
+_NO_FRAME_WARNING_AFTER_S = 15.0
 
 
 def _load_labels(path: str) -> List[str]:
@@ -160,6 +180,12 @@ class CameraModule(SensorModule):
         self._last_classify_ts = 0.0
         self._backend = "usb"
         self._vid_bin: Optional[str] = None
+        self._stream_started_ts = 0.0
+        self._last_frame_ts = 0.0
+        self._no_frame_warned = False
+        self._frames_read = 0
+        self._stderr_tail: "collections.deque[str]" = collections.deque(maxlen=20)
+        self._stderr_thread: Optional[threading.Thread] = None
 
     def run(self) -> None:
         if not CV2_AVAILABLE:
@@ -200,12 +226,36 @@ class CameraModule(SensorModule):
         last_restart_attempt = 0.0
         try:
             while not self._stop.is_set():
+                now = time.time()
                 if self._proc is None or self._proc.poll() is not None:
-                    now = time.time()
                     if (now - last_restart_attempt) > 5.0:
                         last_restart_attempt = now
-                        self.log.warning("camera stream process not running — restarting")
+                        # Surface WHY it died, not just that it did --
+                        # found on real hardware (.51) that the stream
+                        # process can exit near-instantly (lost a device
+                        # race to another process) with nothing in the
+                        # log explaining it beyond a generic restart
+                        # message, which made a real failure look
+                        # identical to routine startup.
+                        recent_stderr = " | ".join(self._stderr_tail) if self._stderr_tail else "(no stderr captured)"
+                        self.log.warning("camera stream process not running (exit=%s) — restarting. Recent output: %s",
+                                          self._proc.poll() if self._proc else "never started", recent_stderr)
                         self._start_stream(device, stream_fps, width, height)
+                elif (self._last_frame_ts == 0.0
+                        and not self._no_frame_warned
+                        and (now - self._stream_started_ts) > _NO_FRAME_WARNING_AFTER_S):
+                    # Process is alive (so it didn't fail to open the
+                    # device outright) but the reader thread has never
+                    # produced a single frame -- the exact silent-failure
+                    # gap found on real hardware (.51): the stream *looked*
+                    # healthy (process running, no exception) while
+                    # actually stuck, and nothing said so. Logged once per
+                    # stream instance, not repeated every loop tick.
+                    self._no_frame_warned = True
+                    self.log.warning(
+                        "camera stream process has been running %.0fs with zero frames "
+                        "captured — device may be contended by another process, or the "
+                        "stream format isn't being parsed correctly", now - self._stream_started_ts)
 
                 self._handle_classify_request(min_interval_s, confidence_threshold)
                 time.sleep(0.1)
@@ -224,14 +274,37 @@ class CameraModule(SensorModule):
         else:
             cmd = ["ffmpeg", "-f", "v4l2", "-i", device, "-vf", f"fps={fps}",
                    "-f", "mjpeg", "-q:v", "5", "-"]
+        self._stream_started_ts = time.time()
+        self._last_frame_ts = 0.0
+        self._no_frame_warned = False
+        self._stderr_tail.clear()
         try:
-            self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         except Exception:
             self.log.exception("failed to start camera stream process")
             self._proc = None
             return
         self._reader_thread = threading.Thread(target=self._read_stream, daemon=True)
         self._reader_thread.start()
+        self._stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
+        self._stderr_thread.start()
+
+    def _read_stderr(self) -> None:
+        # Captured (not discarded) specifically so a real failure -- lost
+        # a device race, unsupported format, etc. -- leaves a trail
+        # instead of the process just silently going quiet. Kept only as
+        # a small ring buffer, not logged line-by-line (ffmpeg/rpicam-vid
+        # are both routinely noisy on stderr during normal operation).
+        proc = self._proc
+        if proc is None or proc.stderr is None:
+            return
+        try:
+            for line in proc.stderr:
+                text = line.decode(errors="replace").strip()
+                if text:
+                    self._stderr_tail.append(text)
+        except Exception:
+            pass
 
     def _stop_stream(self) -> None:
         if self._proc is None:
@@ -245,29 +318,66 @@ class CameraModule(SensorModule):
             except Exception:
                 pass
         self._proc = None
+        # Stale frame would otherwise sit there looking "fresh enough"
+        # (within FRAME_FILE_MAX_AGE_S) to diag_snapshot.php for a few
+        # seconds after this module actually stops.
+        try:
+            os.unlink(FRAME_FILE)
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
 
     def _read_stream(self) -> None:
+        # Found on real hardware (.51): this loop previously had no
+        # try/except at all -- an unhandled exception here (e.g. a
+        # BrokenPipeError if the process died mid-read) would silently end
+        # the thread with self._latest_frame stuck at None forever, no log
+        # line, no crash, nothing. The stream process itself could stay
+        # alive and look perfectly healthy in `ps` the whole time, making
+        # this genuinely hard to tell apart from "just hasn't gotten a
+        # frame yet." Logged explicitly now instead of disappearing.
         proc = self._proc
         if proc is None or proc.stdout is None:
             return
         buf = b""
-        while not self._stop.is_set() and proc.poll() is None:
-            chunk = proc.stdout.read(4096)
-            if not chunk:
-                break
-            buf += chunk
-            if len(buf) > _MAX_STREAM_BUFFER:
-                buf = buf[-_MAX_STREAM_BUFFER // 2:]
-            start = buf.find(_JPEG_SOI)
-            if start == -1:
-                continue
-            end = buf.find(_JPEG_EOI, start + 2)
-            if end == -1:
-                continue
-            with self._frame_lock:
-                self._latest_frame = buf[start:end + 2]
-            buf = buf[end + 2:]
-        self.log.debug("camera stream reader exiting")
+        try:
+            while not self._stop.is_set() and proc.poll() is None:
+                chunk = proc.stdout.read(4096)
+                if not chunk:
+                    break
+                buf += chunk
+                if len(buf) > _MAX_STREAM_BUFFER:
+                    buf = buf[-_MAX_STREAM_BUFFER // 2:]
+                start = buf.find(_JPEG_SOI)
+                if start == -1:
+                    continue
+                end = buf.find(_JPEG_EOI, start + 2)
+                if end == -1:
+                    continue
+                frame = buf[start:end + 2]
+                buf = buf[end + 2:]
+                now = time.time()
+                with self._frame_lock:
+                    self._latest_frame = frame
+                self._last_frame_ts = now
+                self._frames_read += 1
+                self._write_frame_file(frame)
+        except Exception:
+            self.log.exception("camera stream reader crashed")
+        self.log.debug("camera stream reader exiting (frames_read=%d)", self._frames_read)
+
+    def _write_frame_file(self, frame: bytes) -> None:
+        # Shared with www/diag_snapshot.php -- see FRAME_FILE's comment.
+        # Best-effort: a failure here must never affect classification,
+        # which only ever reads self._latest_frame in memory.
+        try:
+            tmp = FRAME_FILE + ".tmp"
+            with open(tmp, "wb") as f:
+                f.write(frame)
+            os.replace(tmp, FRAME_FILE)
+        except Exception as exc:
+            self.log.debug("frame file write failed: %s", exc)
 
     # ------------------------------------------------------------------
     # Classify-request handling
@@ -292,7 +402,15 @@ class CameraModule(SensorModule):
         with self._frame_lock:
             frame = self._latest_frame
         if frame is None:
-            self.log.debug("no camera frame available yet — skipping classify request")
+            # Upgraded from debug -- this is exactly the symptom found on
+            # real hardware (.51): a classify request silently producing
+            # nothing, with zero trail explaining why. Naturally
+            # rate-limited already (one classify request per radar pass,
+            # further throttled by min_interval_s), so this can't spam.
+            self.log.warning(
+                "no camera frame available yet — skipping classify request "
+                "(stream running=%s, frames read so far=%d)",
+                self._proc is not None and self._proc.poll() is None, self._frames_read)
             return
 
         self._last_classify_ts = now
