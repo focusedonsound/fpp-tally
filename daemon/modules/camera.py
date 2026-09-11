@@ -37,17 +37,45 @@ Cold-open problem: the existing diagnostics camera snapshot endpoints
 (www/diag_snapshot.php) spawn a fresh `ffmpeg` process and re-open the V4L2
 device on every single request, which measured at ~3.2s on this hardware
 (see README.md) -- far too slow to use per radar event. This module instead
-keeps ONE long-lived `ffmpeg` process open for as long as the module runs,
-continuously reading its MJPEG stdout stream in a background thread and
-keeping only the single latest decoded frame in memory (never queued, never
-written to disk). A classify request then always has a recent, already-warm
-frame available with no capture delay.
+keeps ONE long-lived stream process open for as long as the module runs,
+continuously reading its MJPEG stdout in a background thread and keeping
+only the single latest decoded frame in memory (never queued, never written
+to disk). A classify request then always has a recent, already-warm frame
+available with no capture delay.
+
+Two capture backends -- USB webcam and CSI (Raspberry Pi Camera Module) need
+genuinely different tooling, confirmed directly on real hardware (a Pi
+Camera Module 3 on a desk-test Pi): a CSI sensor's raw /dev/videoN node only
+exposes unprocessed Bayer/greyscale formats -- `ffmpeg -f v4l2` (the USB
+path, and what www/diag_snapshot.php already uses) cannot pull a JPEG/YUV
+frame from it directly, because libcamera does the debayering/ISP work
+itself rather than exposing it through a plain v4l2 pipeline. `rpicam-vid
+--codec mjpeg -t 0 -o -` (or the older `libcamera-vid` name) is the
+equivalent continuous-MJPEG-to-stdout tool for a CSI camera and was verified
+to work exactly like the ffmpeg path from this module's point of view:
+
+  "backend": "auto" (default) -- auto-detected once at module start via
+  _detect_backend(): if `rpicam-hello`/`libcamera-hello --list-cameras`
+  finds a working camera, use the CSI backend; otherwise fall back to the
+  USB/ffmpeg backend against `camera.device`. "usb" or "csi" force one
+  path explicitly (e.g. a system with both a CSI camera and an unrelated
+  USB webcam, where auto-detection would guess wrong).
+
+Verified end-to-end on real CSI hardware (Pi Camera Module 3, Pi 3B):
+auto-detection picked the CSI backend correctly, and a real captured frame
+correctly classified as "person" (confidence 0.40) with an actual person in
+frame. One CSI-specific latency worth knowing: the stream's first usable
+frame took ~6-7s to appear after start (sensor mode selection/autoexposure
+settling), vs. much faster for a USB webcam -- a one-time cost paid once at
+module startup (or stream restart), not per classification, since the
+stream stays open and continuously updated afterward.
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -94,6 +122,30 @@ def _load_labels(path: str) -> List[str]:
         return []
 
 
+def _detect_backend(cam_cfg: dict, log: logging.Logger) -> Tuple[str, Optional[str]]:
+    """Returns (backend, rpicam_vid_bin). backend is "usb" or "csi";
+    rpicam_vid_bin is the CSI capture binary's path (None for "usb").
+    See module docstring -- CSI and USB cameras need different capture
+    tools entirely, this is not just a device-path difference."""
+    forced = cam_cfg.get("backend", "auto")
+    if forced in ("usb", "csi"):
+        vid_bin = shutil.which("rpicam-vid") or shutil.which("libcamera-vid") if forced == "csi" else None
+        return forced, vid_bin
+
+    vid_bin = shutil.which("rpicam-vid") or shutil.which("libcamera-vid")
+    hello_bin = shutil.which("rpicam-hello") or shutil.which("libcamera-hello")
+    if vid_bin and hello_bin:
+        try:
+            result = subprocess.run([hello_bin, "--list-cameras"], capture_output=True,
+                                     text=True, timeout=5)
+            if "Available cameras" in result.stdout and "No cameras available" not in result.stdout:
+                log.info("CSI camera detected via %s — using rpicam backend", hello_bin)
+                return "csi", vid_bin
+        except Exception as exc:
+            log.debug("CSI camera auto-detect failed: %s", exc)
+    return "usb", None
+
+
 class CameraModule(SensorModule):
     name = "camera"
 
@@ -106,6 +158,8 @@ class CameraModule(SensorModule):
         self._net = None
         self._labels: List[str] = []
         self._last_classify_ts = 0.0
+        self._backend = "usb"
+        self._vid_bin: Optional[str] = None
 
     def run(self) -> None:
         if not CV2_AVAILABLE:
@@ -115,6 +169,9 @@ class CameraModule(SensorModule):
         cam_cfg = self.cfg.get("camera", {}) or {}
         device = cam_cfg.get("device") or (self.cfg.get("calibration", {}) or {}).get(
             "camera_device", "/dev/video0")
+        width = int(cam_cfg.get("width", 640))
+        height = int(cam_cfg.get("height", 480))
+        self._backend, self._vid_bin = _detect_backend(cam_cfg, self.log)
         stream_fps = float(cam_cfg.get("stream_fps", 2))
         # Real single-frame inference on the reference Pi 3B+ measured at
         # ~5.2-5.4s (see module docstring) -- 6s default leaves it as the
@@ -135,9 +192,10 @@ class CameraModule(SensorModule):
             return
         self._labels = _load_labels(_MODEL_LABELS)
 
-        self._start_stream(device, stream_fps)
-        self.log.info("camera module running: device=%s stream_fps=%s min_interval_s=%s",
-                       device, stream_fps, min_interval_s)
+        self._start_stream(device, stream_fps, width, height)
+        self.log.info("camera module running: backend=%s device=%s stream_fps=%s min_interval_s=%s",
+                       self._backend, device if self._backend == "usb" else "(csi, auto)",
+                       stream_fps, min_interval_s)
 
         last_restart_attempt = 0.0
         try:
@@ -147,7 +205,7 @@ class CameraModule(SensorModule):
                     if (now - last_restart_attempt) > 5.0:
                         last_restart_attempt = now
                         self.log.warning("camera stream process not running — restarting")
-                        self._start_stream(device, stream_fps)
+                        self._start_stream(device, stream_fps, width, height)
 
                 self._handle_classify_request(min_interval_s, confidence_threshold)
                 time.sleep(0.1)
@@ -158,9 +216,14 @@ class CameraModule(SensorModule):
     # Persistent warm MJPEG stream
     # ------------------------------------------------------------------
 
-    def _start_stream(self, device: str, fps: float) -> None:
-        cmd = ["ffmpeg", "-f", "v4l2", "-i", device, "-vf", f"fps={fps}",
-               "-f", "mjpeg", "-q:v", "5", "-"]
+    def _start_stream(self, device: str, fps: float, width: int, height: int) -> None:
+        if self._backend == "csi":
+            cmd = [self._vid_bin, "--codec", "mjpeg", "-t", "0", "--nopreview",
+                   "--width", str(width), "--height", str(height),
+                   "--framerate", str(fps), "-o", "-"]
+        else:
+            cmd = ["ffmpeg", "-f", "v4l2", "-i", device, "-vf", f"fps={fps}",
+                   "-f", "mjpeg", "-q:v", "5", "-"]
         try:
             self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         except Exception:

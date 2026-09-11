@@ -94,7 +94,10 @@
     "require_password_on_diagnostics": false
   },
   "camera": {
+    "backend": "auto",
     "device": "/dev/video0",
+    "width": 640,
+    "height": 480,
     "stream_fps": 2,
     "min_interval_s": 6,
     "confidence_threshold": 0.5
