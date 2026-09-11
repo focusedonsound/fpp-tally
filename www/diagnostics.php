@@ -47,16 +47,26 @@ ini_set('display_errors', '0');
 .diag-lane-road {
   position: relative; height: 130px; border-radius: .4rem; overflow: hidden;
   border: 2px solid rgba(255,255,255,0.15);
-  background: repeating-linear-gradient(180deg, #3d3d3d 0 2px, #454545 2px 4px), linear-gradient(#454545, #3a3a3a);
+  /* Asphalt: flat dark base + a faint speckle texture so it doesn't
+     read as a plain gray box, plus solid white edge lines top/bottom
+     (the shoulder markings a real 2-lane road has) and the road's own
+     halves painted underneath everything else. */
+  background-color: #2e2f31;
+  background-image:
+    radial-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
+    radial-gradient(rgba(0,0,0,0.25) 1px, transparent 1px);
+  background-size: 9px 9px, 13px 13px;
+  background-position: 0 0, 4px 6px;
+  box-shadow: inset 0 6px 0 -3px rgba(255,255,255,0.55), inset 0 -6px 0 -3px rgba(255,255,255,0.55);
 }
-.diag-lane-half { position: absolute; top: 0; bottom: 0; transition: background-color .2s ease; display: flex; align-items: flex-end; justify-content: center; padding-bottom: .4rem; }
+.diag-lane-half { position: absolute; top: 0; bottom: 0; transition: background-color .2s ease; display: flex; align-items: flex-end; justify-content: center; padding-bottom: .4rem; z-index: 1; }
 .diag-lane-half.occupied { background-color: rgba(54,162,235,0.28); }
 .diag-lane-half .diag-lane-status { font-size: .75rem; font-weight: 700; color: #cfe8ff; text-shadow: 0 1px 2px rgba(0,0,0,0.6); }
 .diag-lane-near { left: 0; }
 .diag-lane-far { right: 0; }
 .diag-lane-divider {
-  position: absolute; top: 0; bottom: 0; width: 0;
-  border-left: 3px dashed #f0c419; opacity: .9; z-index: 2;
+  position: absolute; top: 6px; bottom: 6px; width: 0;
+  border-left: 3px dashed #f0c419; opacity: .95; z-index: 2;
   transition: left .2s ease;
 }
 .diag-lane-mailbox {
