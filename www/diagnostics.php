@@ -44,11 +44,51 @@ ini_set('display_errors', '0');
 .diag-cam-frame img { max-width: 100%; display: block; }
 .diag-cam-auth input[type=password] { width: 100%; padding: .5rem; margin: .5rem 0; background: rgba(255,255,255,0.06); border: 1px solid #555; color: inherit; border-radius: 4px; }
 #diagThermalCanvas { border: 1px solid rgba(255,255,255,0.12); border-radius: .3rem; image-rendering: pixelated; }
+.diag-lane-road { display: flex; gap: 4px; border: 2px solid rgba(255,255,255,0.15); border-radius: .3rem; overflow: hidden; height: 90px; }
+.diag-lane { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .3rem; background: rgba(255,255,255,0.04); transition: background .2s ease; position: relative; }
+.diag-lane.occupied { background: rgba(54,162,235,0.35); }
+.diag-lane-label { font-size: .75rem; color: #999; text-transform: uppercase; letter-spacing: .04em; }
+.diag-lane-status { font-size: 1rem; font-weight: 700; }
+.diag-lane-mailbox { position: absolute; left: -1px; top: 0; bottom: 0; width: 4px; background: #d9822b; }
+.diag-lane-gates { display: flex; gap: 2px; margin-top: .75rem; }
+.diag-lane-gate { width: 100%; height: 10px; border-radius: 2px; background: rgba(255,255,255,0.1); }
+.diag-lastpass { font-size: .85rem; margin-top: .6rem; }
 </style>
 
 <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
   <h3 class="mb-0"><i class="fas fa-fw fa-satellite-dish"></i> Tally Diagnostics</h3>
   <span class="text-muted small">Live view only — nothing on this page is written to the database.</span>
+</div>
+
+<div class="tally-card" id="diagLaneCard">
+  <h4><i class="fas fa-fw fa-road"></i> Lane View</h4>
+  <p class="text-muted small mb-2">
+    Combined read from both radars (they're co-located, so whichever side currently sees a
+    stronger signal in a gate wins). The near lane is closer to the sensors — typically traffic
+    leaving the property; the far lane is the far side of the road — typically incoming traffic.
+    This is a display split only, not used for detection or triggers.
+  </p>
+  <div class="diag-lane-road" id="diagLaneRoad">
+    <div class="diag-lane" id="diagLaneNear">
+      <div class="diag-lane-mailbox" title="Mailbox / sensor position"></div>
+      <span class="diag-lane-label">Near lane</span>
+      <span class="diag-lane-status" id="diagLaneNearStatus">Clear</span>
+    </div>
+    <div class="diag-lane" id="diagLaneFar">
+      <span class="diag-lane-label">Far lane</span>
+      <span class="diag-lane-status" id="diagLaneFarStatus">Clear</span>
+    </div>
+  </div>
+  <div class="diag-lane-gates" id="diagLaneGates"></div>
+  <div class="d-flex align-items-center gap-2 flex-wrap mt-2">
+    <label class="small text-muted mb-0" for="diagLaneSplit">Near/far split (gate)</label>
+    <input type="number" id="diagLaneSplit" class="form-control form-control-sm" style="width:5rem;" min="1" max="8" value="4" oninput="diagRedrawGateBars()">
+    <button type="button" class="tally-btn tally-btn-sm" onclick="diagSaveLaneSplit()">
+      <i class="fas fa-floppy-disk"></i> Save &amp; Apply
+    </button>
+    <span class="small" id="diagLaneSplitStatus"></span>
+  </div>
+  <div class="diag-lastpass text-muted" id="diagLastPass">No pass recorded yet this session.</div>
 </div>
 
 <div class="row">
@@ -432,6 +472,104 @@ function diagRedrawGateBars() {
       <div class="diag-side-title">Side B${diagLastLd2410.zone ? ' — ' + diagLastLd2410.zone : ''}</div>
       ${diagGateBars('B', diagLastLd2410.B, threshold)}
     </div>`;
+  diagRenderLane(diagLastLd2410, threshold);
+}
+
+// --- Lane view -----------------------------------------------------------
+let diagLaneSplitInitDone = false;
+
+function diagCurrentLaneSplit() {
+  const v = parseInt(document.getElementById('diagLaneSplit').value, 10);
+  return isNaN(v) ? 4 : v;
+}
+
+function diagRenderLane(ld2410Data, threshold) {
+  const road = document.getElementById('diagLaneRoad');
+  if (!ld2410Data || (!ld2410Data.A?.connected && !ld2410Data.B?.connected)) {
+    road.style.opacity = '0.4';
+    document.getElementById('diagLaneGates').innerHTML = '';
+    return;
+  }
+  road.style.opacity = '1';
+
+  // Combined per-gate energy: A and B are co-located, so for each gate
+  // take whichever side currently reads stronger -- a real target in
+  // front of the mailbox should register on both, but aim/wiring/noise
+  // can make one side read weaker at any given instant.
+  const gA = ld2410Data.A?.gate_move_energy || [];
+  const gB = ld2410Data.B?.gate_move_energy || [];
+  const sA = ld2410Data.A?.gate_static_energy || [];
+  const sB = ld2410Data.B?.gate_static_energy || [];
+  const combined = [];
+  for (let g = 0; g < DIAG_NUM_GATES; g++) {
+    const move = Math.max(gA[g] || 0, gB[g] || 0);
+    const stat = Math.max(sA[g] || 0, sB[g] || 0);
+    combined.push(Math.max(move, stat));
+  }
+
+  const split = diagCurrentLaneSplit();
+  const nearOccupied = combined.slice(0, split).some(e => e >= threshold);
+  const farOccupied = combined.slice(split).some(e => e >= threshold);
+
+  const nearEl = document.getElementById('diagLaneNear');
+  const farEl = document.getElementById('diagLaneFar');
+  nearEl.classList.toggle('occupied', nearOccupied);
+  farEl.classList.toggle('occupied', farOccupied);
+  document.getElementById('diagLaneNearStatus').textContent = nearOccupied ? 'Vehicle' : 'Clear';
+  document.getElementById('diagLaneFarStatus').textContent = farOccupied ? 'Vehicle' : 'Clear';
+
+  // Small gate strip under the lanes -- same combined data, just a
+  // compact reference so the lane split is visibly tied to real gate
+  // numbers rather than an opaque near/far label.
+  let gatesHtml = '';
+  for (let g = 0; g < DIAG_NUM_GATES; g++) {
+    const pct = diagGatePct(combined[g]);
+    const over = combined[g] >= threshold;
+    const color = over ? (g < split ? '#36a2eb' : '#ff9f40') : 'rgba(255,255,255,0.1)';
+    gatesHtml += `<div class="diag-lane-gate" style="background:${over ? color : 'rgba(255,255,255,0.1)'};opacity:${over ? 1 : 0.4}" title="Gate ${g}: ${combined[g]}"></div>`;
+  }
+  document.getElementById('diagLaneGates').innerHTML = gatesHtml;
+
+  // Last pass, from the daemon's own live-state (see ld2410.py) -- real
+  // measured A<->B transit time / speed = sensor spacing / transit,
+  // not just a pass/fail check against sequence_window_s.
+  const lastPassEl = document.getElementById('diagLastPass');
+  const lp = ld2410Data.last_pass;
+  if (!lp) {
+    lastPassEl.textContent = 'No pass recorded yet this session.';
+  } else {
+    const ageS = Math.max(0, Math.round(Date.now() / 1000 - lp.ts));
+    const mph = lp.speed_mps != null ? (lp.speed_mps * 2.23694).toFixed(1) + ' mph' : 'speed unknown';
+    const likely = lp.speed_mps != null
+      ? (lp.speed_mps < 2.5 ? ' — likely stopping to view' : ' — quick pass-by')
+      : '';
+    lastPassEl.innerHTML = `Last pass: <strong>${lp.direction}</strong>, ${mph}${likely} <span class="text-muted">(${lp.transit_s}s transit, ${ageS}s ago)</span>`;
+  }
+}
+
+async function diagSaveLaneSplit() {
+  const statusEl = document.getElementById('diagLaneSplitStatus');
+  const value = diagCurrentLaneSplit();
+  statusEl.textContent = 'Saving…';
+  try {
+    const fd = new FormData();
+    fd.append('action', 'set_lane_split');
+    fd.append('lane_split_gate', value);
+    const res = await fetch('plugin.php?plugin=fpp-tally&page=www/diag_tune.php&nopage=1', { method: 'POST', body: fd, cache: 'no-store' });
+    const data = await res.json();
+    if (data.status !== 'OK') {
+      statusEl.textContent = 'Error: ' + (data.message || 'save failed');
+      return;
+    }
+    statusEl.textContent = 'Saved — restarting daemon…';
+    const fd2 = new FormData();
+    fd2.append('action', 'restart');
+    await fetch('plugin.php?plugin=fpp-tally&page=www/control.php&nopage=1', { method: 'POST', body: fd2, cache: 'no-store' });
+    statusEl.textContent = 'Applied.';
+    setTimeout(() => { statusEl.textContent = ''; }, 4000);
+  } catch (e) {
+    statusEl.textContent = 'Request failed.';
+  }
 }
 
 async function diagSaveMinEnergy() {
@@ -476,6 +614,11 @@ async function diagPoll() {
     document.getElementById('diagMinEnergy').value = data.ld2410_min_energy;
   }
 
+  if (!diagLaneSplitInitDone && data.ld2410 && data.ld2410.lane_split_gate != null) {
+    diagLaneSplitInitDone = true;
+    document.getElementById('diagLaneSplit').value = data.ld2410.lane_split_gate;
+  }
+
   if (!diagCamInitDone) {
     diagCamInitDone = true;
     diagCamRequirePassword = !!(data.camera && data.camera.require_password);
@@ -491,9 +634,12 @@ async function diagPoll() {
   const ld2410Body = document.getElementById('diagLd2410Body');
   if (!data.modules.ld2410) {
     ld2410Body.innerHTML = '<div class="col-12 text-muted small">Module not enabled in Setup.</div>';
+    diagRenderLane(null, diagCurrentThreshold());
   } else if (!data.ld2410) {
     ld2410Body.innerHTML = '<div class="col-12 text-muted small">No radar data yet — waiting for the daemon.</div>';
+    diagRenderLane(null, diagCurrentThreshold());
   } else {
+    diagRenderLane(data.ld2410, diagCurrentThreshold());
     diagLastLd2410 = data.ld2410;
     const threshold = diagCurrentThreshold();
     ld2410Body.innerHTML = `

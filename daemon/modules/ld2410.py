@@ -276,6 +276,21 @@ class LD2410Module(SensorModule):
         seq_window_s = float(ld_cfg.get("sequence_window_s", 0.8))
         parked_timeout_s = float(ld_cfg.get("parked_timeout_s", 180))
         min_energy = int(ld_cfg.get("min_energy", 20))
+        # Physical distance between the two radar units, used to turn the
+        # measured A<->B trigger gap into a real speed estimate (distance
+        # / time) instead of just a pass/fail check against
+        # sequence_window_s. Default matches the reference mailbox
+        # mounting (24in) -- every install's actual spacing differs, so
+        # this must be configurable, not assumed.
+        sensor_separation_m = float(ld_cfg.get("sensor_separation_cm", 61)) / 100.0
+        # Gate index (0-8) marking the boundary between the "near lane"
+        # (closer to the sensors, e.g. traffic leaving the property) and
+        # "far lane" (e.g. incoming traffic on the far side of the road)
+        # for the Diagnostics page's lane view. Purely a display split,
+        # not used in any detection/trigger logic -- every install's
+        # actual mailbox-to-road geometry differs, so this needs to be
+        # tuned per install, not assumed.
+        lane_split_gate = int(ld_cfg.get("lane_split_gate", 4))
         # Which raw sequence ("A_to_B" or "B_to_A") counts as this zone's
         # configured "direction A" — the reverse sequence is "direction B".
         # Lets a builder wire the two radar units in either physical order
@@ -306,6 +321,11 @@ class LD2410Module(SensorModule):
         cooldown_s = 1.5
         last_pass_ts = 0.0
         last_live_write = 0.0
+        # Most recent pass, for the Diagnostics page's lane view -- live
+        # display only, this doesn't replace the DB as the source of
+        # truth for history, it just avoids that page needing a second
+        # endpoint/DB query just to show "what just happened."
+        last_pass_info: dict | None = None
 
         self.log.info("LD2410B module running: zone=%s A=%s B=%s", zone, ok_a, ok_b)
 
@@ -342,12 +362,31 @@ class LD2410Module(SensorModule):
                         seq = f"{other}_to_{side}"
                         direction = label_for(seq)
                         last_pass_ts = now
+                        # Real speed = the known physical gap between the
+                        # two units / how long it actually took to trigger
+                        # the second one, not just "did it happen within
+                        # the window" -- previously this elapsed time was
+                        # computed for the pass/fail check and then thrown
+                        # away. Guarded the same way thermal.py's own
+                        # _estimate_speed_mps is: a near-zero elapsed time
+                        # (sensor noise, not a real transit) would produce
+                        # a nonsense huge speed, so skip it instead.
+                        elapsed_s = now - other_t
+                        speed_mps = sensor_separation_m / elapsed_s if elapsed_s >= 0.05 else None
                         self._emit(
                             kind="vehicle", zone=zone, sensor_source="ld2410b",
                             event_type="pass", direction=direction,
-                            dwell_duration_s=None, speed_estimate=None,
+                            dwell_duration_s=None, speed_estimate=speed_mps,
                         )
-                        self.log.info("[LD2410] pass zone=%s dir=%s", zone, direction)
+                        self.log.info("[LD2410] pass zone=%s dir=%s transit=%.2fs speed=%s",
+                                      zone, direction, elapsed_s,
+                                      f"{speed_mps:.2f}m/s" if speed_mps else "n/a")
+                        last_pass_info = {
+                            "direction": direction,
+                            "transit_s": round(elapsed_s, 2),
+                            "speed_mps": round(speed_mps, 2) if speed_mps else None,
+                            "ts": now,
+                        }
 
                 if present:
                     parked.on_presence(now)
@@ -376,6 +415,8 @@ class LD2410Module(SensorModule):
                         "updated_at": now,
                         "A": _report_to_dict(reader_a),
                         "B": _report_to_dict(reader_b),
+                        "lane_split_gate": lane_split_gate,
+                        "last_pass": last_pass_info,
                     }
                     tmp = LIVE_STATE_FILE + ".tmp"
                     with open(tmp, "w") as f:

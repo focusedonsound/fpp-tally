@@ -34,7 +34,9 @@
     "parked_timeout_s": 180,
     "min_energy": 20,
     "toward_reference": "A_to_B",
-    "zone": "driveway"
+    "zone": "driveway",
+    "sensor_separation_cm": 61,
+    "lane_split_gate": 4
   },
   "thermal": {
     "i2c_bus": 1,
