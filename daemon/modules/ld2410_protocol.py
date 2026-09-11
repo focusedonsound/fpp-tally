@@ -448,7 +448,17 @@ def ld2410_read_gate_config(ser) -> Optional[dict]:
     + 0xAA head marker(1) + max_distance_gate(1) + configured max moving
     gate(1) + configured max static gate(1) + motion sensitivity per
     gate 0-8(9) + static sensitivity per gate 0-8(9) + no-person
-    duration seconds, u16le(2)."""
+    duration seconds, u16le(2).
+
+    Bit-7 masked on every field except no_person_duration_s -- confirmed
+    on real hardware (192.168.0.51) the same USB-serial parity
+    corruption already worked around throughout this file also hits this
+    response: configured_max_static_gate arrived as 128 (should be 1-8)
+    and multiple sensitivity values arrived with bit 7 set (158 instead
+    of 30, 143 instead of 15). Every masked field's legitimate range
+    (1-8 for gate indices, 0-100 for sensitivity) never needs that bit.
+    no_person_duration_s is deliberately left unmasked -- its documented
+    range is 0-65535 seconds, so bit 7 can be genuine data there."""
     ser.write(_pack_cfg_frame(0x0061))
     payload = _read_cfg_response(ser)
     if payload is None or len(payload) < 28:
@@ -456,11 +466,11 @@ def ld2410_read_gate_config(ser) -> Optional[dict]:
     if (payload[2] & 0x7F) != 0 or (payload[3] & 0x7F) != 0:
         return None  # ACK status != success
     return {
-        "max_distance_gate": payload[5],
-        "configured_max_moving_gate": payload[6],
-        "configured_max_static_gate": payload[7],
-        "motion_sensitivity": list(payload[8:17]),
-        "static_sensitivity": list(payload[17:26]),
+        "max_distance_gate": payload[5] & 0x7F,
+        "configured_max_moving_gate": payload[6] & 0x7F,
+        "configured_max_static_gate": payload[7] & 0x7F,
+        "motion_sensitivity": [b & 0x7F for b in payload[8:17]],
+        "static_sensitivity": [b & 0x7F for b in payload[17:26]],
         "no_person_duration_s": payload[26] | (payload[27] << 8),
     }
 
