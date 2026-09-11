@@ -476,24 +476,33 @@ def ld2410_read_gate_config(ser) -> Optional[dict]:
     (command 0x0061). Returns None on failure. Radar must already be in
     config mode.
 
-    Retries up to 3 times (same count and reasoning as
-    ld2410_enter_config's own retry loop): confirmed on real hardware
-    this single request/response round trip fails intermittently in ways
-    bit-7 masking can't fix -- a genuine timeout (no response at all
-    within the read deadline) and a truncated/short response were both
-    observed in back-to-back attempts, distinct from the "arrived but
-    with a corrupted bit" case the masking above handles. Both are
-    exactly the kind of one-off comm glitch a retry resolves."""
-    for attempt in range(3):
+    Retries a structurally-failed attempt (timeout, truncated response --
+    same reasoning as ld2410_enter_config's own retry loop), AND requires
+    two consecutive *structurally successful* reads to agree before
+    trusting the result. Confirmed on real hardware this second check is
+    necessary, not just the first: a corrupted sensitivity byte can land
+    on a value that's still plausible on its own (12 or 8 instead of the
+    real 20 -- all valid 0-100 sensitivities), so range-checking alone
+    can't tell a genuine reading from a corrupted-but-plausible one the
+    way the data-frame decoders' distance bounds can. Two reads
+    disagreeing is the signal; the one they eventually agree on is
+    trusted. Up to 5 attempts total so one bad read among several good
+    ones doesn't need to coincidentally repeat before this gives up."""
+    last = None
+    for attempt in range(5):
         cfg = _read_gate_config_once(ser)
         if cfg is not None:
-            return cfg
+            if cfg == last:
+                return cfg
+            last = cfg
+        else:
+            last = None
         time.sleep(0.15)
         try:
             ser.reset_input_buffer()
         except Exception:
             pass
-    return None
+    return last
 
 
 def _set_gate_sensitivity_once(ser, gate: int, motion_sensitivity: int, static_sensitivity: int) -> bool:
