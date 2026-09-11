@@ -49,6 +49,11 @@ LIVE_STATE_FILE = os.path.join(_STATE_DIR, "ld2410_live.json")
 # conflict with it) and answered via the response file.
 GATE_CMD_FILE = os.path.join(_STATE_DIR, "ld2410_gate_cmd.json")
 GATE_RESULT_FILE = os.path.join(_STATE_DIR, "ld2410_gate_result.json")
+# Fire-and-forget request to camera.py at pass-emit time -- see that
+# module's docstring. Never read back a result here: classification is an
+# auto-tuning-assist side effect only, and must never add latency to (or
+# depend on the camera even being enabled for) a real radar pass event.
+CLASSIFY_CMD_FILE = os.path.join(_STATE_DIR, "camera_classify_cmd.json")
 
 # How long a reader can go without a single successfully-decoded report
 # before the module assumes the radar itself has gone quiet (not the USB
@@ -313,6 +318,54 @@ def _report_to_dict(reader: _RadarReader) -> dict:
     return base
 
 
+def _peak_energy_and_gates(reader_a: "_RadarReader", reader_b: "_RadarReader",
+                            min_energy: int) -> tuple[int, int]:
+    """Rough per-pass radar "signature" for the camera-assisted tuning
+    feature: the single highest gate-energy reading and how many gates (across
+    both units) currently read at/above min_energy -- not a physical
+    measurement, just enough signal to let pass_features correlate a
+    camera-confirmed vehicle/non-vehicle label against radar strength."""
+    peak = 0
+    gates_lit = 0
+    for reader in (reader_a, reader_b):
+        r = reader.last_report
+        if r is None:
+            continue
+        gate_energy = getattr(r, "gate_move_energy", None)
+        if gate_energy:
+            for e in gate_energy:
+                if e is None:
+                    continue
+                peak = max(peak, e)
+                if e >= min_energy:
+                    gates_lit += 1
+        else:
+            # Basic-mode fallback -- only the overall move_energy is
+            # available, no per-gate breakdown.
+            me = getattr(r, "move_energy", None)
+            if me is not None:
+                peak = max(peak, me)
+                if me >= min_energy:
+                    gates_lit += 1
+    return peak, gates_lit
+
+
+def _write_classify_request(zone: str, direction: str, speed_mps, peak_energy: int,
+                             gates_lit: int, log) -> None:
+    try:
+        os.makedirs(_STATE_DIR, exist_ok=True)
+        payload = {
+            "zone": zone, "direction": direction, "speed_mps": speed_mps,
+            "peak_energy": peak_energy, "gates_lit": gates_lit, "ts": time.time(),
+        }
+        tmp = CLASSIFY_CMD_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(payload, f)
+        os.replace(tmp, CLASSIFY_CMD_FILE)
+    except Exception as exc:
+        log.debug("classify request write failed: %s", exc)
+
+
 def _write_gate_result(payload: dict) -> None:
     try:
         os.makedirs(_STATE_DIR, exist_ok=True)
@@ -495,6 +548,16 @@ class LD2410Module(SensorModule):
                             "speed_mps": round(speed_mps, 2) if speed_mps else None,
                             "ts": now,
                         }
+                        # Auto-tuning-assist only -- fire-and-forget, never
+                        # waited on, and skipped entirely unless the camera
+                        # module is actually enabled so no stale request
+                        # file lingers for a module that isn't running to
+                        # ever consume it. See camera.py's docstring.
+                        if (self.cfg.get("modules", {}) or {}).get("camera"):
+                            peak_energy, gates_lit = _peak_energy_and_gates(
+                                reader_a, reader_b, min_energy)
+                            _write_classify_request(
+                                zone, direction, speed_mps, peak_energy, gates_lit, self.log)
 
                 if present:
                     parked.on_presence(now)

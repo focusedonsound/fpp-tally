@@ -69,6 +69,46 @@ if python3 -m pip --version >/dev/null 2>&1; then
         || log "WARN: one or more optional libraries failed to install (non-fatal — that module stays disabled until resolved)"
 fi
 
+# ── Optional: camera-assisted classification (python3-opencv + model) ──
+# Not in pluginInfo.json's mandatory dependencies block -- python3-opencv
+# pulls in ~75MB of libraries (libvtk, libopenmpi, etc.), and the camera
+# module defaults to disabled, so forcing every builder to install it
+# unconditionally (even those with no camera hardware at all) would be a
+# poor trade for a feature most installs won't use. Best-effort and
+# non-fatal either way: if this fails, the camera module logs an error and
+# idles, same as any other optional module with missing hardware/libraries.
+log "Installing optional camera-classification support..."
+if apt-get install -y --no-install-recommends python3-opencv ffmpeg \
+    >> "$LOGFILE" 2>&1; then
+    log "python3-opencv/ffmpeg installed OK"
+else
+    log "WARN: python3-opencv/ffmpeg install failed (non-fatal — camera module stays disabled until resolved)"
+fi
+
+MODEL_DIR="${PLUGIN_DIR}/daemon/models/ssd_mobilenet_v1_coco"
+if [[ ! -f "${MODEL_DIR}/frozen_inference_graph.pb" ]]; then
+    log "Downloading camera classification model (TF MobileNet-SSD v1 COCO)..."
+    mkdir -p "$MODEL_DIR"
+    TMP_TAR="$(mktemp)"
+    if curl -fsSL -o "$TMP_TAR" \
+        "http://download.tensorflow.org/models/object_detection/ssd_mobilenet_v1_coco_2017_11_17.tar.gz" \
+        && tar -xzf "$TMP_TAR" -O ssd_mobilenet_v1_coco_2017_11_17/frozen_inference_graph.pb \
+            > "${MODEL_DIR}/frozen_inference_graph.pb" \
+        && curl -fsSL -o "${MODEL_DIR}/graph.pbtxt" \
+            "https://raw.githubusercontent.com/opencv/opencv_extra/master/testdata/dnn/ssd_mobilenet_v1_coco_2017_11_17.pbtxt" \
+        && curl -fsSL -o "${MODEL_DIR}/labels.txt" \
+            "https://raw.githubusercontent.com/opencv/opencv/master/samples/data/dnn/object_detection_classes_coco.txt"
+    then
+        log "Camera classification model downloaded OK"
+    else
+        log "WARN: camera classification model download failed (non-fatal — camera module stays disabled until resolved; re-run this installer once network access is available to retry)"
+        rm -f "${MODEL_DIR}/frozen_inference_graph.pb" "${MODEL_DIR}/graph.pbtxt" "${MODEL_DIR}/labels.txt"
+    fi
+    rm -f "$TMP_TAR"
+else
+    log "Camera classification model already present — skipping download"
+fi
+
 # ── Make scripts executable ──────────────────────────────────────
 log "Setting script permissions..."
 chmod +x "${PLUGIN_DIR}/daemon/"*.py 2>/dev/null || true

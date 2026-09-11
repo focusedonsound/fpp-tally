@@ -14,15 +14,21 @@ stays testable/mockable in isolation and a bug in one module's event
 formatting can't corrupt another module's writes.
 
 Event dict shape (put onto the queue):
-  {"module": "ld2410" | "thermal" | "crowd_ble" | "crowd_wifi" | "bme280",
-   "kind":   "vehicle" | "scan" | "environment",
+  {"module": "ld2410" | "thermal" | "crowd_ble" | "crowd_wifi" | "bme280" | "camera",
+   "kind":   "vehicle" | "scan" | "environment" | "classification",
    ...kind-specific fields...}
 
-  kind="vehicle":     zone, sensor_source, event_type ("pass"|"parked"),
-                       direction (nullable), dwell_duration_s (nullable),
-                       speed_estimate (nullable)
-  kind="scan":         source ("ble"|"wifi"), raw_count
-  kind="environment":  temperature_f (nullable), humidity_pct (nullable)
+  kind="vehicle":        zone, sensor_source, event_type ("pass"|"parked"),
+                          direction (nullable), dwell_duration_s (nullable),
+                          speed_estimate (nullable)
+  kind="scan":            source ("ble"|"wifi"), raw_count
+  kind="environment":     temperature_f (nullable), humidity_pct (nullable)
+  kind="classification":  zone, direction (nullable), speed_estimate (nullable),
+                          peak_energy (nullable), gates_lit (nullable),
+                          camera_label (nullable), camera_confidence (nullable)
+                          -- see camera.py; pairs a radar pass's own features
+                          with what the camera saw at that moment, for the
+                          Diagnostics page's auto-tuning-assist suggestion.
 """
 from __future__ import annotations
 

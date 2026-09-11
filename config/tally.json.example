@@ -6,7 +6,8 @@
     "crowd_ble": true,
     "crowd_wifi": false,
     "bme280": false,
-    "dht11": false
+    "dht11": false,
+    "camera": false
   },
   "registration": {
     "email": "",
@@ -91,5 +92,11 @@
     "session_timeout_min": 30,
     "camera_device": "/dev/video0",
     "require_password_on_diagnostics": false
+  },
+  "camera": {
+    "device": "/dev/video0",
+    "stream_fps": 2,
+    "min_interval_s": 3,
+    "confidence_threshold": 0.5
   }
 }

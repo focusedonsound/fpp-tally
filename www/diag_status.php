@@ -55,11 +55,17 @@ $result = [
         "crowd_ble"  => !empty($modules['crowd_ble']),
         "crowd_wifi" => !empty($modules['crowd_wifi']),
         "thermal"    => !empty($modules['thermal']),
+        "camera"     => !empty($modules['camera']),
     ],
     "wifi_interface" => $cs['wifi_interface'] ?? 'wlan0',
     "ld2410_min_energy" => (int)($cfg['ld2410']['min_energy'] ?? 20),
     "camera"         => [
         "require_password" => !empty($calib['require_password_on_diagnostics']),
+        // Auto-tuning-assist classifier's live readout -- see camera.py.
+        // Distinct from the require_password diagnostics-snapshot flag
+        // above; both live under "camera" since they're both camera
+        // related, but they're otherwise unconnected features.
+        "classify" => withStale(readJsonFile("$STATE_DIR/camera_live.json"), 10.0),
     ],
     "ld2410"         => withStale(readJsonFile("$STATE_DIR/ld2410_live.json")),
     "crowd_ble"      => withStale(readJsonFile("$STATE_DIR/crowd_ble_live.json")),

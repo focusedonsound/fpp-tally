@@ -202,6 +202,40 @@ ini_set('display_errors', '0');
   <div id="diagGateSensBody" class="text-muted small">Click "Read Current Values" to load this side's current per-gate sensitivity from the radar.</div>
 </div>
 
+<div class="tally-card" id="diagCamTuneCard">
+  <h4><i class="fas fa-fw fa-car"></i> Camera-Assisted Tuning</h4>
+  <p class="text-muted small mb-2">
+    When the camera module is enabled, every radar pass gets a best-effort camera classification
+    (car/truck/bus vs. person/dog/cat/...) paired with that pass's peak gate energy. Once enough of both
+    kinds have been seen, this suggests a <code>min_energy</code> threshold that would have kept every
+    vehicle observed while excluding everything else — it's only a suggestion; nothing here changes
+    detection until you press Apply.
+  </p>
+  <div id="diagCamTuneDisabled" class="text-muted small" style="display:none;">
+    Camera module not enabled in Setup — enable it to start collecting samples.
+  </div>
+  <div id="diagCamTuneBody" style="display:none;">
+    <div class="small text-muted mb-2" id="diagCamTuneLast">No classification yet this session.</div>
+    <div class="d-flex flex-wrap gap-4 mb-2">
+      <div>
+        <div class="small text-muted">Vehicle samples</div>
+        <div id="diagCamTuneVehicleStats">—</div>
+      </div>
+      <div>
+        <div class="small text-muted">Non-vehicle samples</div>
+        <div id="diagCamTuneNonVehicleStats">—</div>
+      </div>
+    </div>
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+      <span class="small" id="diagCamTuneSuggestion">Collecting data…</span>
+      <button type="button" class="tally-btn tally-btn-sm" id="diagCamTuneApplyBtn" onclick="diagCamTuneApply()" disabled>
+        <i class="fas fa-check"></i> Apply Suggested Threshold
+      </button>
+      <span class="small" id="diagCamTuneApplyStatus"></span>
+    </div>
+  </div>
+</div>
+
 <div class="tally-card" id="diagThermalCard">
   <h4><i class="fas fa-fw fa-fire"></i> MLX90640 Thermal — Delta Grid</h4>
   <div id="diagThermalBody">
@@ -756,6 +790,68 @@ async function diagSaveMinEnergy() {
   }
 }
 
+// --- Camera-assisted tuning -----------------------------------------------
+let diagCamTuneSuggested = null;
+
+function diagCamTuneRenderBucket(elId, bucket) {
+  const el = document.getElementById(elId);
+  if (!bucket || !bucket.count) { el.textContent = '0 samples'; return; }
+  el.textContent = `${bucket.count} samples — energy ${bucket.min_energy}–${bucket.max_energy} (avg ${bucket.avg_energy})`;
+}
+
+async function diagCamTuneRefresh() {
+  let data;
+  try {
+    const res = await fetch('plugin.php?plugin=fpp-tally&page=www/diag_camera_stats.php&nopage=1', { cache: 'no-store' });
+    data = await res.json();
+  } catch (e) {
+    return;
+  }
+
+  diagCamTuneRenderBucket('diagCamTuneVehicleStats', data.vehicle);
+  diagCamTuneRenderBucket('diagCamTuneNonVehicleStats', data.not_vehicle);
+
+  const suggestionEl = document.getElementById('diagCamTuneSuggestion');
+  const applyBtn = document.getElementById('diagCamTuneApplyBtn');
+  diagCamTuneSuggested = data.suggested_min_energy;
+  if (diagCamTuneSuggested != null) {
+    const current = diagCurrentThreshold();
+    suggestionEl.textContent = `Suggested min_energy: ${diagCamTuneSuggested} (current: ${current})`;
+    applyBtn.disabled = false;
+  } else {
+    const need = data.min_samples_required ?? 15;
+    suggestionEl.textContent = `Collecting data — need at least ${need} vehicle and ${need} non-vehicle samples.`;
+    applyBtn.disabled = true;
+  }
+}
+
+async function diagCamTuneApply() {
+  if (diagCamTuneSuggested == null) return;
+  const statusEl = document.getElementById('diagCamTuneApplyStatus');
+  document.getElementById('diagMinEnergy').value = diagCamTuneSuggested;
+  diagRedrawGateBars();
+  statusEl.textContent = 'Applying…';
+  try {
+    const fd = new FormData();
+    fd.append('action', 'set_min_energy');
+    fd.append('min_energy', diagCamTuneSuggested);
+    const res = await fetch('plugin.php?plugin=fpp-tally&page=www/diag_tune.php&nopage=1', { method: 'POST', body: fd, cache: 'no-store' });
+    const data = await res.json();
+    if (data.status !== 'OK') {
+      statusEl.textContent = 'Error: ' + (data.message || 'save failed');
+      return;
+    }
+    statusEl.textContent = 'Saved — restarting daemon…';
+    const fd2 = new FormData();
+    fd2.append('action', 'restart');
+    await fetch('plugin.php?plugin=fpp-tally&page=www/control.php&nopage=1', { method: 'POST', body: fd2, cache: 'no-store' });
+    statusEl.textContent = 'Applied.';
+    setTimeout(() => { statusEl.textContent = ''; }, 4000);
+  } catch (e) {
+    statusEl.textContent = 'Request failed.';
+  }
+}
+
 // --- Main poll loop -----------------------------------------------------
 let diagCamInitDone = false;
 
@@ -812,6 +908,18 @@ async function diagPoll() {
       </div>`;
   }
 
+  const camTuneEnabled = !!data.modules.camera;
+  document.getElementById('diagCamTuneDisabled').style.display = camTuneEnabled ? 'none' : '';
+  document.getElementById('diagCamTuneBody').style.display = camTuneEnabled ? '' : 'none';
+  const lastClassify = data.camera && data.camera.classify;
+  if (camTuneEnabled && lastClassify && lastClassify.label) {
+    const ageS = lastClassify.stale ? ' (stale)' : '';
+    const conf = lastClassify.confidence != null ? ` (${Math.round(lastClassify.confidence * 100)}%)` : '';
+    document.getElementById('diagCamTuneLast').textContent = `Last classified: ${lastClassify.label}${conf}${ageS}`;
+  } else if (camTuneEnabled) {
+    document.getElementById('diagCamTuneLast').textContent = 'No classification yet this session.';
+  }
+
   diagRenderThermal(document.getElementById('diagThermalBody'), data.thermal, data.modules.thermal);
 
   diagBleTable(document.getElementById('diagBleBody'), data.crowd_ble, data.modules.crowd_ble);
@@ -821,8 +929,15 @@ async function diagPoll() {
 
 diagPoll();
 const diagInterval = setInterval(diagPoll, 1000);
+// Sample-count/suggestion stats change slowly (one classification every
+// few seconds at most, per camera.py's min_interval_s throttle) -- a
+// separate, much slower interval avoids hammering a SQLite query every
+// single 1s diagPoll tick for no benefit.
+diagCamTuneRefresh();
+const diagCamTuneInterval = setInterval(diagCamTuneRefresh, 5000);
 window.addEventListener('beforeunload', () => {
   clearInterval(diagInterval);
+  clearInterval(diagCamTuneInterval);
   diagCamRunning = false;
   if (diagCamTimer) clearTimeout(diagCamTimer);
 });

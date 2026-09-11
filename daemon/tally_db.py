@@ -52,7 +52,26 @@ CREATE TABLE IF NOT EXISTS environment (
     humidity_pct    REAL
 );
 CREATE INDEX IF NOT EXISTS idx_environment_ts ON environment(timestamp);
+
+CREATE TABLE IF NOT EXISTS pass_features (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp         DATETIME NOT NULL,
+    zone              TEXT NOT NULL,
+    direction         TEXT,
+    speed_estimate    REAL,
+    peak_energy       INTEGER,
+    gates_lit         INTEGER,
+    camera_label      TEXT,
+    camera_confidence REAL
+);
+CREATE INDEX IF NOT EXISTS idx_pass_features_ts    ON pass_features(timestamp);
+CREATE INDEX IF NOT EXISTS idx_pass_features_label  ON pass_features(camera_label);
 """
+
+# camera_label -> coarse vehicle/not_vehicle bucket, for label_energy_stats().
+# COCO class names as returned by the camera module's classifier.
+VEHICLE_LABELS = {"car", "truck", "bus", "motorcycle"}
+NON_VEHICLE_LABELS = {"person", "dog", "cat", "bicycle"}
 
 # event_type values
 EVENT_PASS   = "pass"
@@ -270,6 +289,76 @@ class TallyDB:
     # ------------------------------------------------------------------
     # Diagnostics / reset
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # pass_features (camera-assisted tuning)
+    # ------------------------------------------------------------------
+
+    def log_pass_features(
+        self,
+        zone: str,
+        direction: Optional[str],
+        speed_estimate: Optional[float],
+        peak_energy: Optional[int],
+        gates_lit: Optional[int],
+        camera_label: Optional[str],
+        camera_confidence: Optional[float],
+    ) -> int:
+        assert self._con
+        cur = self._con.execute(
+            "INSERT INTO pass_features (timestamp, zone, direction, speed_estimate, "
+            "peak_energy, gates_lit, camera_label, camera_confidence) VALUES (?,?,?,?,?,?,?,?)",
+            (_now_iso(), zone, direction, speed_estimate, peak_energy, gates_lit,
+             camera_label, camera_confidence),
+        )
+        self._con.commit()
+        return int(cur.lastrowid)
+
+    def label_energy_stats(self) -> Dict[str, Any]:
+        """Sample counts and peak_energy min/max/avg for the vehicle vs.
+        not_vehicle buckets, plus a suggested min_energy threshold (lowest
+        confirmed-vehicle peak_energy, so it's inclusive of every vehicle
+        seen so far) -- the input the Diagnostics page's camera-tuning
+        panel needs. Rows with an unrecognized/missing label or peak_energy
+        are excluded from both buckets rather than guessed at."""
+        assert self._con
+        placeholders_v = ",".join("?" * len(VEHICLE_LABELS))
+        placeholders_nv = ",".join("?" * len(NON_VEHICLE_LABELS))
+        row_v = self._con.execute(
+            f"SELECT COUNT(*) n, MIN(peak_energy) lo, MAX(peak_energy) hi, AVG(peak_energy) avg "
+            f"FROM pass_features WHERE camera_label IN ({placeholders_v}) AND peak_energy IS NOT NULL",
+            tuple(VEHICLE_LABELS),
+        ).fetchone()
+        row_nv = self._con.execute(
+            f"SELECT COUNT(*) n, MIN(peak_energy) lo, MAX(peak_energy) hi, AVG(peak_energy) avg "
+            f"FROM pass_features WHERE camera_label IN ({placeholders_nv}) AND peak_energy IS NOT NULL",
+            tuple(NON_VEHICLE_LABELS),
+        ).fetchone()
+
+        def _bucket(row):
+            return {
+                "count": int(row["n"] or 0),
+                "min_energy": row["lo"],
+                "max_energy": row["hi"],
+                "avg_energy": round(row["avg"], 1) if row["avg"] is not None else None,
+            }
+
+        vehicle = _bucket(row_v)
+        not_vehicle = _bucket(row_nv)
+
+        # Suggested threshold: the lowest peak_energy seen on a confirmed
+        # vehicle -- everything at or above it kept every vehicle observed
+        # so far. Only offered once there's enough of both classes to be
+        # meaningful; never computed from one bucket alone.
+        suggested_min_energy = None
+        if vehicle["count"] >= 15 and not_vehicle["count"] >= 15 and vehicle["min_energy"] is not None:
+            suggested_min_energy = vehicle["min_energy"]
+
+        return {
+            "vehicle": vehicle,
+            "not_vehicle": not_vehicle,
+            "suggested_min_energy": suggested_min_energy,
+        }
 
     def reset_today(self) -> int:
         """Delete today's events (test data cleanup). Returns rows removed."""

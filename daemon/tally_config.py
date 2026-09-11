@@ -20,7 +20,7 @@ _LOGGER = logging.getLogger("tally.config")
 
 # Every module key this build of Tally knows about. A module absent from
 # config['modules'] is treated as disabled (fail-closed), not an error.
-KNOWN_MODULES = ("ld2410", "thermal", "crowd_ble", "crowd_wifi", "bme280", "dht11")
+KNOWN_MODULES = ("ld2410", "thermal", "crowd_ble", "crowd_wifi", "bme280", "dht11", "camera")
 
 
 def load_config() -> Dict[str, Any]:

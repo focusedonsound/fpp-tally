@@ -6,3 +6,5 @@ __pycache__/
 _test_logs/
 _test.db
 _test_cfg.json
+# Downloaded by fpp_install.sh at install time -- ~28MB, not committed.
+daemon/models/

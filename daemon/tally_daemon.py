@@ -41,6 +41,7 @@ from modules.crowd_ble import CrowdBLEModule
 from modules.crowd_wifi import CrowdWiFiModule
 from modules.bme280 import BME280Module
 from modules.dht11 import DHT11Module
+from modules.camera import CameraModule
 
 _LOGDIR = os.environ.get("LOGDIR", "/home/fpp/media/logs")
 LOG_FILE = os.path.join(_LOGDIR, "plugin-fpp-tally.log")
@@ -75,6 +76,7 @@ MODULE_CLASSES = {
     "crowd_wifi": CrowdWiFiModule,
     "bme280": BME280Module,
     "dht11": DHT11Module,
+    "camera": CameraModule,
 }
 
 _shutdown = threading.Event()
@@ -199,6 +201,22 @@ def _handle_environment_event(db: TallyDB, ha: TallyHA, ev: Dict[str, Any]) -> N
     ha.set_environment(ev.get("temperature_f"), ev.get("humidity_pct"))
 
 
+def _handle_classification_event(db: TallyDB, ev: Dict[str, Any]) -> None:
+    """Camera-assisted tuning: pairs a radar pass's own features (already
+    gathered by ld2410.py at emit time) with the camera's label for that
+    same moment. Never touches counts/triggers/HA -- see camera.py's
+    docstring, this is auto-tuning-ASSIST data only."""
+    db.log_pass_features(
+        zone=ev.get("zone") or "unknown",
+        direction=ev.get("direction"),
+        speed_estimate=ev.get("speed_estimate"),
+        peak_energy=ev.get("peak_energy"),
+        gates_lit=ev.get("gates_lit"),
+        camera_label=ev.get("camera_label"),
+        camera_confidence=ev.get("camera_confidence"),
+    )
+
+
 def _simulate_vehicle(zone: str, event_queue: "queue.Queue[dict]", cfg: Dict[str, Any]) -> None:
     """Backs the 'Trigger Test Vehicle Event' FPP command / diagnostics
     button — dispatches a synthetic pass event without any real hardware,
@@ -301,6 +319,8 @@ def main() -> None:
                     _handle_scan_event(db, ha, cfg, mods_enabled, firer, ev)
                 elif kind == "environment":
                     _handle_environment_event(db, ha, ev)
+                elif kind == "classification":
+                    _handle_classification_event(db, ev)
                 else:
                     log.warning("unknown event kind from %s: %r", ev.get("module"), kind)
             except Exception:
