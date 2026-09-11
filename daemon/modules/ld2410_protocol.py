@@ -318,3 +318,21 @@ def ld2410_enable_eng(ser) -> bool:
     ser.write(_pack_cfg_frame(0x0062))
     rsp = _read_cfg_response(ser)
     return _cfg_ack(rsp)
+
+
+def ld2410_disable_eng(ser) -> bool:
+    """Disable engineering mode, returning to basic (summary-only) data
+    frames. Radar must already be in config mode.
+
+    Not currently called anywhere in ld2410.py -- the module always
+    attempts to enable engineering mode and never turns it back off, so
+    this exists for completeness (mirrors fpp-sled-mailbox's own
+    ld2410_disable_eng) and for ad-hoc testing. Confirmed on real
+    hardware that engineering mode is a setting the radar itself
+    persists across reconnects -- simply not re-sending the enable
+    command on a fresh connection does NOT revert a radar that was
+    already enabled in a prior session; only this explicit disable call
+    does."""
+    ser.write(_pack_cfg_frame(0x0063))
+    rsp = _read_cfg_response(ser)
+    return _cfg_ack(rsp)
