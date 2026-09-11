@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import struct
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -473,36 +474,50 @@ def _read_gate_config_once(ser) -> Optional[dict]:
 
 def ld2410_read_gate_config(ser) -> Optional[dict]:
     """Read the radar's current per-gate sensitivity configuration
-    (command 0x0061). Returns None on failure. Radar must already be in
-    config mode.
+    (command 0x0061). Returns None if too few readable samples came back
+    to form a real answer. Radar must already be in config mode.
 
-    Retries a structurally-failed attempt (timeout, truncated response --
-    same reasoning as ld2410_enter_config's own retry loop), AND requires
-    two consecutive *structurally successful* reads to agree before
-    trusting the result. Confirmed on real hardware this second check is
-    necessary, not just the first: a corrupted sensitivity byte can land
-    on a value that's still plausible on its own (12 or 8 instead of the
-    real 20 -- all valid 0-100 sensitivities), so range-checking alone
-    can't tell a genuine reading from a corrupted-but-plausible one the
-    way the data-frame decoders' distance bounds can. Two reads
-    disagreeing is the signal; the one they eventually agree on is
-    trusted. Up to 5 attempts total so one bad read among several good
-    ones doesn't need to coincidentally repeat before this gives up."""
-    last = None
-    for attempt in range(5):
+    Collects up to 6 structurally-successful reads (retrying a
+    structurally-failed attempt -- timeout, truncated response -- same
+    reasoning as ld2410_enter_config's own retry loop) and takes a
+    per-field majority vote across them, rather than trusting the first
+    read that merely parses without error, or even requiring one lucky
+    exact match between two full reads in a row.
+
+    Confirmed on real hardware this per-field approach is needed, not
+    just a retry: individual sensitivity bytes corrupt independently of
+    each other and land on values that are still plausible on their own
+    (12 or 8 instead of the real 20 -- all valid 0-100 sensitivities), so
+    range-checking can't catch it the way the data-frame decoders'
+    distance bounds can. Requiring two FULL 21-field reads to match
+    exactly turned out to be too strict in practice -- with ~21
+    independent fields each occasionally wrong, the odds of any two
+    complete reads agreeing on all of them are worse than the odds of
+    each individual field being correct most of the time. Voting per
+    field uses that partial correctness instead of discarding it."""
+    samples = []
+    for attempt in range(6):
         cfg = _read_gate_config_once(ser)
         if cfg is not None:
-            if cfg == last:
-                return cfg
-            last = cfg
-        else:
-            last = None
+            samples.append(cfg)
         time.sleep(0.15)
         try:
             ser.reset_input_buffer()
         except Exception:
             pass
-    return last
+
+    if len(samples) < 2:
+        return None
+
+    def _vote(values):
+        return Counter(values).most_common(1)[0][0]
+
+    result = {}
+    for key in ("max_distance_gate", "configured_max_moving_gate", "configured_max_static_gate", "no_person_duration_s"):
+        result[key] = _vote(s[key] for s in samples)
+    for key in ("motion_sensitivity", "static_sensitivity"):
+        result[key] = [_vote(s[key][g] for s in samples) for g in range(NUM_GATES)]
+    return result
 
 
 def _set_gate_sensitivity_once(ser, gate: int, motion_sensitivity: int, static_sensitivity: int) -> bool:
