@@ -22,6 +22,17 @@ same hardware. The model files are downloaded by fpp_install.sh (not
 committed to the plugin repo — the frozen graph alone is ~28MB) from
 download.tensorflow.org / opencv_extra's testdata; see MODEL_DIR below.
 
+Inference latency: measured directly on a real Pi 3B+ (the reference
+hardware) at a consistent ~5.2-5.4s per single-frame classification, with no
+warm-up speedup across repeated calls -- this runs synchronously in the same
+thread that polls CLASSIFY_CMD_FILE, so it's the real floor on how often a
+pass can actually get classified regardless of min_interval_s. That's fine
+for this feature (auto-tuning-assist, not real-time gating -- a request that
+lands mid-inference is simply dropped, same as any other throttled request,
+and the label always lands a few seconds after the pass it belongs to, which
+nothing here depends on being instant), but min_interval_s should be set at
+or above that real latency, not below it.
+
 Cold-open problem: the existing diagnostics camera snapshot endpoints
 (www/diag_snapshot.php) spawn a fresh `ffmpeg` process and re-open the V4L2
 device on every single request, which measured at ~3.2s on this hardware
@@ -105,7 +116,10 @@ class CameraModule(SensorModule):
         device = cam_cfg.get("device") or (self.cfg.get("calibration", {}) or {}).get(
             "camera_device", "/dev/video0")
         stream_fps = float(cam_cfg.get("stream_fps", 2))
-        min_interval_s = float(cam_cfg.get("min_interval_s", 3))
+        # Real single-frame inference on the reference Pi 3B+ measured at
+        # ~5.2-5.4s (see module docstring) -- 6s default leaves it as the
+        # binding throttle rather than a number smaller than reality.
+        min_interval_s = float(cam_cfg.get("min_interval_s", 6))
         confidence_threshold = float(cam_cfg.get("confidence_threshold", 0.5))
 
         if not (os.path.isfile(_MODEL_PB) and os.path.isfile(_MODEL_PBTXT)):

@@ -96,7 +96,7 @@
   "camera": {
     "device": "/dev/video0",
     "stream_fps": 2,
-    "min_interval_s": 3,
+    "min_interval_s": 6,
     "confidence_threshold": 0.5
   }
 }
