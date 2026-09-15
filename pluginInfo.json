@@ -7,6 +7,74 @@
   "srcURL": "https://github.com/focusedonsound/fpp-tally.git",
   "bugURL": "https://github.com/focusedonsound/fpp-tally/issues",
   "allowUpdates": 1,
+  "privacy": {
+    "summary": "Logs vehicle/crowd events from your local radar, thermal, and BLE/WiFi sensors to a local database and, if you enable it, your own MQTT broker. Sends your email only if you register the web UI.",
+    "sends": [
+      {
+        "to": "tally-license.nscilingo.workers.dev",
+        "what": "your email, a hardware ID derived from the Pi's CPU serial/machine-id, and license key",
+        "why": "web UI registration and (future) license validation",
+        "alwaysOn": false
+      },
+      {
+        "to": "your MQTT broker",
+        "what": "vehicle/parked counters, crowd estimate, temperature/humidity, HA discovery config",
+        "why": "MQTT / Home Assistant integration",
+        "alwaysOn": false
+      }
+    ],
+    "collects": [
+      {
+        "what": "vehicle pass/parked events: zone, direction, timestamp, dwell time, speed estimate",
+        "about": "passers-by",
+        "keptDays": null,
+        "canDelete": false,
+        "where": "plugindata/fpp-tally/state/tally.db"
+      },
+      {
+        "what": "aggregate BLE/WiFi nearby-device counts (no individual identifiers persisted)",
+        "about": "passers-by",
+        "keptDays": null,
+        "canDelete": false,
+        "where": "plugindata/fpp-tally/state/tally.db"
+      },
+      {
+        "what": "camera classification label and confidence (e.g. \"car\") for each vehicle event, no images",
+        "about": "passers-by",
+        "keptDays": null,
+        "canDelete": false,
+        "where": "plugindata/fpp-tally/state/tally.db"
+      },
+      {
+        "what": "most recent camera frame (one JPEG, continuously overwritten) for the diagnostics preview",
+        "about": "passers-by",
+        "keptDays": 0,
+        "canDelete": false,
+        "where": "plugindata/fpp-tally/state/camera_frame.jpg"
+      },
+      {
+        "what": "live BLE/WiFi scan detail (MAC, RSSI, name) for the diagnostics page, overwritten each scan",
+        "about": "passers-by",
+        "keptDays": 0,
+        "canDelete": false,
+        "where": "plugindata/fpp-tally/state/crowd_ble_live.json and crowd_wifi_live.json"
+      }
+    ],
+    "sensors": [
+      { "type": "camera", "stored": true },
+      { "type": "presence", "stored": false },
+      { "type": "presence", "stored": true }
+    ],
+    "remoteAccess": "none",
+    "systemChanges": [
+      { "kind": "service", "what": "creates and enables tally.service (systemd), running as the fpp user" },
+      { "kind": "privilege", "what": "adds a sudoers rule (/etc/sudoers.d/tally) letting fpp restart tally.service only" },
+      { "kind": "download", "what": "downloads a pretrained MobileNet-SSD object-detection model from download.tensorflow.org" },
+      { "kind": "download", "what": "downloads the model's graph/label files from raw.githubusercontent.com" }
+    ],
+    "closedCode": false,
+    "other": "A hidden, password-gated developer-only camera calibration route exists for sensor tuning; it auto-expires (default 30 min), defaults off after every boot, and its audit log records only activation timestamps, never frame content. There is currently no web UI control to delete stored event history; data accumulates until the database file is removed by hand."
+  },
   "versions": [
     {
       "minFPPVersion": "9.0",
