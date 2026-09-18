@@ -224,10 +224,10 @@ show_easter_egg() {
         "fpp-AnnouncementAssistant|one-tap announcements ducked over your show audio"
     )
     local jokes=(
-        "Why did the car apply for a job at Tally? It wanted to be counted on."
-        "I tried to race my own radar gun. I lost — it clocked me instantly."
-        "Why did the minivan get counted twice? It had a lot of car-isma."
-        "My thermal camera doesn't hold grudges. It just runs a little hot sometimes."
+        "Why did the car get a ticket from Tally? Speeding through a counting zone."
+        "I asked my radar gun out. It said I wasn't fast enough for it."
+        "My thermal camera never gets cold feet. Or cold anything, really."
+        "Why did the truck brag about its Tally stats? It's always counted among the greats."
     )
 
     local candidates=()
@@ -238,21 +238,28 @@ show_easter_egg() {
     done
 
     echo
-    echo "🏆 ACHIEVEMENT UNLOCKED"
-    echo "════════════════════════════════════════"
-    echo "🚗  fpp-tally installed / updated"
+    echo "══════════════════════════════════════════"
+    echo "   🏆  A C H I E V E M E N T   U N L O C K E D"
+    echo "══════════════════════════════════════════"
+    echo
+    echo "  🚗  fpp-tally — installed & ready to roll"
     echo
     echo "  \"${jokes[$((RANDOM % ${#jokes[@]}))]}\""
     echo
+    echo "  ⭐⭐⭐⭐⭐  (dad-joke rating, self-awarded)"
+    echo
+    echo "──────────────────────────────────────────"
     if [ ${#candidates[@]} -gt 0 ]; then
         entry="${candidates[$((RANDOM % ${#candidates[@]}))]}"
         repo="${entry%%|*}"
         blurb="${entry#*|}"
-        echo "🎁 Haven't tried ${repo} yet? ${blurb}"
-        echo "   https://github.com/focusedonsound/${repo}"
+        echo "  🎁  NEXT UP: ${repo}"
+        echo "      ${blurb}"
+        echo "      → https://github.com/focusedonsound/${repo}"
     else
-        echo "🎉 Looks like you've got the whole FocusedOnSound collection installed already!"
+        echo "  🎉  FULL COLLECTION UNLOCKED — every FocusedOnSound plugin, right here."
     fi
+    echo "──────────────────────────────────────────"
     echo
 }
 show_easter_egg
