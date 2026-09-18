@@ -224,10 +224,10 @@ show_easter_egg() {
         "fpp-AnnouncementAssistant|one-tap announcements ducked over your show audio"
     )
     local jokes=(
-        "Why did the car cross the road? To pad Tally's traffic count."
-        "I asked my radar gun for relationship advice. It just kept clocking my exes."
-        "Counting cars all night... business is really driving up."
-        "Why did the thermal camera break up with the visible-light camera? No chemistry, just heat."
+        "Why did the car apply for a job at Tally? It wanted to be counted on."
+        "I tried to race my own radar gun. I lost — it clocked me instantly."
+        "Why did the minivan get counted twice? It had a lot of car-isma."
+        "My thermal camera doesn't hold grudges. It just runs a little hot sometimes."
     )
 
     local candidates=()
@@ -238,19 +238,20 @@ show_easter_egg() {
     done
 
     echo
-    echo "  🏆 ┌─────────────────────────────────────────────────┐"
-    echo "     │   ACHIEVEMENT UNLOCKED: 🚗 fpp-tally               │"
-    echo "     └─────────────────────────────────────────────────┘"
-    echo "  ${jokes[$((RANDOM % ${#jokes[@]}))]}"
+    echo "🏆 ACHIEVEMENT UNLOCKED"
+    echo "════════════════════════════════════════"
+    echo "🚗  fpp-tally installed / updated"
+    echo
+    echo "  \"${jokes[$((RANDOM % ${#jokes[@]}))]}\""
     echo
     if [ ${#candidates[@]} -gt 0 ]; then
         entry="${candidates[$((RANDOM % ${#candidates[@]}))]}"
         repo="${entry%%|*}"
         blurb="${entry#*|}"
-        echo "  🎁 Haven't tried ${repo} yet? ${blurb}"
-        echo "     https://github.com/focusedonsound/${repo}"
+        echo "🎁 Haven't tried ${repo} yet? ${blurb}"
+        echo "   https://github.com/focusedonsound/${repo}"
     else
-        echo "  🎉 Looks like you've got the whole FocusedOnSound collection installed already!"
+        echo "🎉 Looks like you've got the whole FocusedOnSound collection installed already!"
     fi
     echo
 }
