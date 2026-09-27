@@ -80,6 +80,29 @@ never blocks the others.
 
 ### Enabling WiFi crowd scanning
 
+WiFi scanning listens for 40% of `interval_s` each cycle (not the
+original short ~17% pulse, but deliberately capped well short of
+continuous - monitor mode hands scapy every 802.11 frame in range for
+full parsing, not just probe requests, and scanning nearly the whole
+interval was tried and reverted after it contributed to an unplanned
+watchdog reboot on real hardware; see crowd_wifi.py's comments for the
+full story and `crowd_scan.wifi_hop_interval_s` for the related
+channel-hop-rate tradeoff) and keeps a rolling window of who's been seen
+recently — `crowd_scan.wifi_rolling_window_s`
+(config-only, default 300s / 5 minutes), edited directly in
+`tally.json` — there's no field for it on the Setup page. Confirmed this
+matters in practice, not just as a tuning
+knob: modern iOS/Android both deliberately throttle how often an idle,
+disconnected phone sends probe requests at all (an anti-tracking measure
+working exactly as intended against this technique), so a real nearby
+phone can go several minutes between probes even while sitting right
+there the whole time. A short window on a fixed interval, with each pass
+replacing the last one outright, made a genuinely-present device look
+like it kept vanishing and reappearing — raise `wifi_rolling_window_s` if
+devices still seem to disappear too quickly for your situation, at the
+cost of the Diagnostics table (and the crowd-estimate count it feeds)
+lagging further behind reality after someone actually leaves.
+
 The Setup page's Crowd Scan Config card defaults the WiFi interface to
 `wlan0` — the Pi's onboard adapter. That's only safe if this Pi reaches
 *its own* network some other way (Ethernet, or no network at all);
@@ -99,35 +122,50 @@ default, not an oversight. If you want to enable it yourself:
 
 ```bash
 sudo setcap cap_net_raw,cap_net_admin=eip /usr/bin/python3.XX
-sudo setcap cap_net_admin=eip $(readlink -f $(which iw))
 ```
 
 (replace `python3.XX` with your system's actual interpreter binary --
-`readlink -f $(which python3)` finds it -- and be aware the first command
-grants that capability to *every* script run by that interpreter, not
-just Tally's daemon; evaluate the tradeoff for your system before doing
-this). **Both commands are needed**, not just the first one: the daemon
-opens its own raw socket in-process (covered by the python3 grant), but
-it also shells out to `iw` to hop across channels 1/6/11 during each scan
-(confirmed necessary on real hardware — a monitor-mode adapter sits on
-whatever channel `iw` last set it to, so without hopping the module only
-ever sees devices probing on that one fixed channel, which read as
-"0 devices nearby" even with real phones in range). `iw` running as its
-own subprocess doesn't inherit the daemon's own capability grant, so it
-needs the second `setcap` line to be able to change channels itself. If
-only the first is set, WiFi scanning will still run without the earlier
-permission error, but stays parked on one channel — check the daemon log
-for "Channel hopping unavailable" if scan results seem too low.
+`readlink -f $(which python3)` finds it -- and be aware this grants that
+capability to *every* script run by that interpreter, not just Tally's
+daemon; evaluate the tradeoff for your system before doing this). This
+covers the daemon's own in-process raw socket that scapy opens.
 
-You'll also need to put the configured interface into monitor mode
-yourself (`sudo iw dev wlan0 set type monitor`, or `wlan1` etc. if you're
-using a second adapter) before starting the daemon; Tally doesn't do this
-for you. Confirmed on real hardware: the Raspberry Pi's own onboard WiFi
-chip (`brcmfmac` driver, e.g. the 3B+'s built-in adapter) does **not**
-support monitor mode at all (`iw` fails with "Operation not supported")
-— if that's your situation, you need a genuine external USB adapter with
-a monitor-mode-capable chipset (confirmed working: RTL8192CU) rather than
-defaulting to the onboard adapter.
+The daemon also shells out to `iw` to hop across channels 1/6/11 during
+each scan (confirmed necessary on real hardware — a monitor-mode adapter
+sits on whatever channel `iw` last set it to, so without hopping the
+module only ever sees devices probing on that one fixed channel, which
+read as "0 devices nearby" even with real phones in range) and to
+`iw`/`ip` to (re-)assert monitor mode itself before each scan window (see
+below). Those two calls go through `sudo` rather than their own `setcap`
+grant — confirmed on real hardware that file capabilities on `ip`/`iw`
+don't actually take effect for these specific operations even when
+`getcap` reports them present, for reasons not fully root-caused (no
+`nosuid` mount, no systemd sandboxing on the unit, full capability
+bounding set on the daemon's own process — `sudo` was the pragmatic fix
+rather than continuing to chase it). This relies on the `fpp` user having
+the broad passwordless sudo access FPP installs by default (`(ALL : ALL)
+NOPASSWD: ALL` — same assumption fpp-hdmi-cec's install already makes for
+its own privileged commands); if your `fpp` user has been locked down
+from that default, add a narrower sudoers rule for `ip` and `iw` instead.
+Check the daemon log for "Channel hopping unavailable" or "Could not
+confirm/set monitor mode" if scan results seem too low or stay at 0.
+
+Tally re-asserts monitor mode on the configured interface itself before
+every scan window (cheap no-op if it's already set), so in the common
+case you don't need to run `iw dev wlan0 set type monitor` by hand at
+all — just grant the three capabilities above and start the daemon. This
+matters in practice, not just in theory: confirmed on real hardware that
+a USB WiFi adapter can drop out and re-enumerate mid-show (see the
+powered-hub warning below), which silently resets it back to the
+driver's default `managed` type with no error — before this self-healing
+was added, that meant WiFi crowd-scan would quietly capture nothing again
+until someone noticed and re-ran the `iw`/`ip` commands by hand. Confirmed
+on real hardware: the Raspberry Pi's own onboard WiFi chip (`brcmfmac`
+driver, e.g. the 3B+'s built-in adapter) does **not** support monitor
+mode at all (`iw` fails with "Operation not supported") — if that's your
+situation, you need a genuine external USB adapter with a monitor-mode-
+capable chipset (confirmed working: RTL8192CU) rather than defaulting to
+the onboard adapter.
 
 > ⚠️ **Use a powered USB hub for the WiFi adapter.** Confirmed on real
 > hardware: a Pi 3B+ already running two USB-serial radar adapters plus a
@@ -143,7 +181,13 @@ defaulting to the onboard adapter.
 > instead of the Pi's own ports. If you ever see WiFi crowd-scan behaving
 > erratically, check `vcgencmd get_throttled` before suspecting the
 > plugin — a non-zero result (especially `0x50000` or similar) means the
-> Pi itself is browning out, not a Tally bug.
+> Pi itself is browning out, not a Tally bug. That said, a USB WiFi
+> adapter re-enumerating isn't always a power problem even on a powered
+> hub — confirmed on real hardware (192.168.0.51, `throttled=0x0`, ruling
+> out under-voltage) a dongle can still drop out and reconnect on its
+> own. That's exactly the case `_ensure_monitor_mode()` (above) recovers
+> from automatically now, so an occasional drop shouldn't need manual
+> intervention either way.
 
 ## What's new in v0.4.0
 
@@ -240,9 +284,15 @@ backend's premium-tier logic once that's actually defined.
     mode automatically (present/distance/energy only, no per-gate detail)
     if a unit doesn't accept the mode-switch — direction/parked detection
     is unaffected either way.
-  - **Raw BLE scan**: the sorted list of unique addresses from the most
-    recent scan window, not just the count.
-  - **Raw WiFi scan**: same, for probe-request source addresses.
+  - **Raw BLE scan**: per-device detail from the most recent scan window
+    (address, address type, name, vendor, RSSI, first/last seen), not
+    just the count.
+  - **Raw WiFi scan**: same idea for probe-request sources - address,
+    whether it's a randomized (private) address or a fixed OUI-assigned
+    one, vendor when resolvable, any SSID(s) it was probing for, RSSI,
+    channel, and first/last seen. Probed SSIDs can reveal a device's
+    remembered home/work network name, which is worth knowing about
+    before pointing this at a public sidewalk.
   - **MLX90640 thermal delta grid**: the 32×24 background-subtracted heat
     grid rendered as a canvas heatmap, with the currently-tracked blob(s)
     circled. Real detection logic, same as the daemon's own

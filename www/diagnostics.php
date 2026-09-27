@@ -260,6 +260,18 @@ function diagBadge(text, cls) {
   return `<span class="tally-badge ${cls}">${text}</span>`;
 }
 
+// BLE device names and WiFi probed-SSID strings are free text taken
+// straight off the air from whatever's broadcasting nearby - not
+// something Tally controls or validates, so they're escaped before ever
+// landing in innerHTML. Without this, a spoofed BLE name or SSID
+// containing markup would execute in the browser of whoever has this
+// page open.
+function diagEsc(s) {
+  const d = document.createElement('div');
+  d.textContent = s == null ? '' : String(s);
+  return d.innerHTML;
+}
+
 // Visual scale ceiling for the bars. Raw gate energy isn't capped at
 // 100 the way the aggregate move/static energy fields are (confirmed on
 // real hardware: individual gates commonly read 100-200+ right next to
@@ -328,31 +340,6 @@ function diagGateBars(side, sideData, threshold) {
   return html;
 }
 
-function diagAddrList(bodyEl, data, moduleEnabled, offlineNote) {
-  if (!moduleEnabled) {
-    bodyEl.innerHTML = `<div class="text-muted">Module not enabled in Setup.</div>`;
-    return;
-  }
-  if (!data) {
-    bodyEl.innerHTML = `<div class="text-muted">No scan yet — waiting for the daemon's first scan window.</div>`;
-    return;
-  }
-  const stale = !!data.stale;
-  const addrs = data.addresses || [];
-  let html = `<div class="d-flex align-items-center gap-2 mb-2">
-    <span class="diag-addr-count">${addrs.length}</span>
-    <span class="text-muted small">unique address${addrs.length === 1 ? '' : 'es'} in most recent scan</span>
-    ${stale ? diagBadge('Stale', 'tally-badge-stale') : ''}
-  </div>`;
-  if (offlineNote) html += `<div class="text-muted small mb-2">${offlineNote}</div>`;
-  if (addrs.length === 0) {
-    html += `<div class="text-muted small">No devices seen in the most recent scan window.</div>`;
-  } else {
-    html += '<ol class="diag-addr-list">' + addrs.map(a => `<li>${a}</li>`).join('') + '</ol>';
-  }
-  bodyEl.innerHTML = html;
-}
-
 function diagRelTime(epochSeconds) {
   if (!epochSeconds) return '—';
   const s = Math.max(0, Math.round(Date.now() / 1000 - epochSeconds));
@@ -398,9 +385,57 @@ function diagBleTable(bodyEl, data, moduleEnabled) {
     html += `<tr>
       <td class="mono">${d.address}</td>
       <td>${d.address_type || '—'}</td>
-      <td>${d.name ? d.name : '<span class="text-muted">—</span>'}</td>
+      <td>${d.name ? diagEsc(d.name) : '<span class="text-muted">—</span>'}</td>
       <td>${(d.vendors && d.vendors.length) ? d.vendors.join(', ') : '<span class="text-muted">—</span>'}</td>
       <td>${d.rssi != null ? d.rssi + ' dBm' : '—'}</td>
+      <td>${diagRelTime(d.first_seen)}</td>
+      <td>${diagRelTime(d.last_seen)}</td>
+    </tr>`;
+  }
+  html += '</tbody></table></div>';
+  bodyEl.innerHTML = html;
+}
+
+function diagWifiTable(bodyEl, data, moduleEnabled, offlineNote) {
+  if (!moduleEnabled) {
+    bodyEl.innerHTML = `<div class="text-muted">Module not enabled in Setup.</div>`;
+    return;
+  }
+  if (!data) {
+    bodyEl.innerHTML = `<div class="text-muted">No scan yet — waiting for the daemon's first scan window.</div>`;
+    return;
+  }
+  const stale = !!data.stale;
+  const devices = data.devices || [];
+  const windowMin = data.rolling_window_s ? Math.round(data.rolling_window_s / 60) : null;
+  let html = `<div class="d-flex align-items-center gap-2 mb-2">
+    <span class="diag-addr-count">${devices.length}</span>
+    <span class="text-muted small">unique device${devices.length === 1 ? '' : 's'} seen in the last${windowMin ? ' ' + windowMin + ' min' : ' scan window'}</span>
+    ${stale ? diagBadge('Stale', 'tally-badge-stale') : ''}
+  </div>`;
+  if (offlineNote) html += `<div class="text-muted small mb-2">${offlineNote}</div>`;
+
+  if (devices.length === 0) {
+    html += `<div class="text-muted small">No devices seen recently.</div>`;
+    bodyEl.innerHTML = html;
+    return;
+  }
+
+  html += `<div style="overflow-x:auto;"><table class="diag-ble-table">
+    <thead><tr>
+      <th>Address</th><th>Type</th><th>Vendor</th><th>Probed SSID(s)</th><th>RSSI</th><th>Channel</th><th>First seen</th><th>Last seen</th>
+    </tr></thead><tbody>`;
+  for (const d of devices) {
+    const ssids = (d.probed_ssids && d.probed_ssids.length)
+      ? d.probed_ssids.map(s => `<span class="mono">${diagEsc(s)}</span>`).join(', ')
+      : '<span class="text-muted">— (wildcard/hidden)</span>';
+    html += `<tr>
+      <td class="mono">${d.address}</td>
+      <td>${d.randomized ? 'Randomized' : 'Fixed'}</td>
+      <td>${d.vendor ? diagEsc(d.vendor) : '<span class="text-muted">—</span>'}</td>
+      <td>${ssids}</td>
+      <td>${d.rssi != null ? d.rssi + ' dBm' : '—'}</td>
+      <td>${d.channel != null ? d.channel : '—'}</td>
       <td>${diagRelTime(d.first_seen)}</td>
       <td>${diagRelTime(d.last_seen)}</td>
     </tr>`;
@@ -923,7 +958,7 @@ async function diagPoll() {
   diagRenderThermal(document.getElementById('diagThermalBody'), data.thermal, data.modules.thermal);
 
   diagBleTable(document.getElementById('diagBleBody'), data.crowd_ble, data.modules.crowd_ble);
-  diagAddrList(document.getElementById('diagWifiBody'), data.crowd_wifi, data.modules.crowd_wifi,
+  diagWifiTable(document.getElementById('diagWifiBody'), data.crowd_wifi, data.modules.crowd_wifi,
     `Interface: ${data.wifi_interface}. Requires monitor mode + elevated privileges — see the Setup page's Crowd Scan Config warning if this stays empty.`);
 }
 

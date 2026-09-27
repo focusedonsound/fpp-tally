@@ -100,6 +100,17 @@ class _RadarReader:
             self.log.info("LD2410B %s: running in basic mode (engineering mode unavailable — "
                            "Diagnostics page will show presence/distance/energy only, no per-gate detail)",
                            self.side)
+
+        # Confirmed on real hardware this needs to be set here, not left
+        # at __init__'s 0.0: the watchdog in run() only ever reconnects a
+        # reader once last_report_ts is truthy (see the loop below), so a
+        # reader that opens the port successfully but then NEVER decodes a
+        # single valid frame (bad handshake, wedged adapter, wrong baud)
+        # would otherwise sit "connected" forever with no path back to a
+        # retry - the initial connect time doubles as a starting grace
+        # period, aging out the same way a real "gone silent" does if
+        # nothing ever arrives.
+        self.last_report_ts = time.time()
         return True
 
     def _enable_engineering_mode(self) -> bool:
@@ -162,31 +173,36 @@ class _RadarReader:
 
     def reconnect(self) -> bool:
         """Close and reopen the port, redoing the engineering-mode
-        handshake. Called by the module's watchdog when a previously-
-        working reader has gone silent for _RECONNECT_TIMEOUT_S.
+        handshake. Called by the module's watchdog either when a
+        previously-working reader has gone silent for
+        _RECONNECT_TIMEOUT_S, or when the port is already closed (never
+        opened, or a prior reconnect attempt failed) and it's been at
+        least that long since the last attempt.
 
-        Confirmed on real hardware this silence happens with NO exception
-        and NO empty read ever logged: the USB-serial adapter stays
-        enumerated (poll_present()'s self._ser.read() keeps succeeding),
-        but the radar itself stops putting anything on the UART, so
-        there's nothing for read()'s try/except to catch. A watchdog on
-        report *age* -- not on read errors -- is the only way to notice
-        this at all, which is exactly why it went unexplained before:
-        the daemon looked alive (live-state file still updating on
-        schedule) with no warning anywhere about why the radar itself had
-        gone quiet."""
+        Confirmed on real hardware the "gone silent while still open"
+        case happens with NO exception and NO empty read ever logged: the
+        USB-serial adapter stays enumerated (poll_present()'s
+        self._ser.read() keeps succeeding), but the radar itself stops
+        putting anything on the UART, so there's nothing for read()'s
+        try/except to catch. A watchdog on report *age* -- not on read
+        errors -- is the only way to notice this at all, which is exactly
+        why it went unexplained before: the daemon looked alive (live-
+        state file still updating on schedule) with no warning anywhere
+        about why the radar itself had gone quiet."""
+        was_open = self._ser is not None
         self._last_reconnect_attempt = time.time()
-        self.log.warning("LD2410B %s: no valid report in over %.0fs — reconnecting",
-                          self.side, _RECONNECT_TIMEOUT_S)
+        if was_open:
+            self.log.warning("LD2410B %s: no valid report in over %.0fs — reconnecting",
+                              self.side, _RECONNECT_TIMEOUT_S)
+        else:
+            self.log.info("LD2410B %s: port unavailable — retrying", self.side)
         self.close()
         self._ser = None
-        ok = self.open()
-        if ok:
-            # Give the reconnect a fresh timeout window rather than
-            # immediately re-triggering the watchdog before the first
-            # post-reconnect frame has had a chance to arrive.
-            self.last_report_ts = time.time()
-        return ok
+        # open() itself sets last_report_ts on success, giving the
+        # reconnect a fresh timeout window rather than immediately
+        # re-triggering the watchdog before the first post-reconnect
+        # frame has had a chance to arrive.
+        return self.open()
 
     def poll_present(self) -> Optional[bool]:
         """Returns True/False if a fresh report was decoded, None if no new
@@ -495,6 +511,19 @@ class LD2410Module(SensorModule):
 
             for side, reader, parked in (("A", reader_a, parked_a), ("B", reader_b, parked_b)):
                 if reader._ser is None:
+                    # Never opened, or a previous reconnect attempt failed.
+                    # Confirmed on real hardware this used to permanently
+                    # strand a reader: a failed reconnect leaves _ser None,
+                    # and this branch used to just `continue` past it every
+                    # tick forever -- the watchdog a few lines down (which
+                    # only runs when _ser is not None) could never fire
+                    # again, so a port that comes back (e.g. after a USB
+                    # bus reset clears) was never retried without a full
+                    # daemon restart. Reuses the same throttle as that
+                    # watchdog so this doesn't hammer a genuinely-missing
+                    # port every 0.05s tick either.
+                    if (now - reader._last_reconnect_attempt) > _RECONNECT_TIMEOUT_S:
+                        reader.reconnect()
                     continue
 
                 # Watchdog: a reader that has received at least one report

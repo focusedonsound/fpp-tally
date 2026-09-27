@@ -53,11 +53,18 @@
         "where": "plugindata/fpp-tally/state/camera_frame.jpg"
       },
       {
-        "what": "live BLE/WiFi scan detail (MAC, RSSI, name) for the diagnostics page, overwritten each scan",
+        "what": "live BLE scan detail (MAC, address type, name, vendor, RSSI) for the diagnostics page, overwritten each scan",
         "about": "passers-by",
         "keptDays": 0,
         "canDelete": false,
-        "where": "plugindata/fpp-tally/state/crowd_ble_live.json and crowd_wifi_live.json"
+        "where": "plugindata/fpp-tally/state/crowd_ble_live.json"
+      },
+      {
+        "what": "live WiFi scan detail for the diagnostics page, retaining each device for a rolling 5-minute window (default, configurable) since its last sighting rather than only the latest instant: MAC, whether it's a randomized address, OUI vendor (when resolvable), RSSI, channel, and any SSID(s) the device was probing for - this last one can reveal a nearby device's remembered home/work network name, not just its MAC",
+        "about": "passers-by",
+        "keptDays": 0,
+        "canDelete": false,
+        "where": "plugindata/fpp-tally/state/crowd_wifi_live.json"
       }
     ],
     "sensors": [
@@ -69,6 +76,7 @@
     "systemChanges": [
       { "kind": "service", "what": "creates and enables tally.service (systemd), running as the fpp user" },
       { "kind": "privilege", "what": "adds a sudoers rule (/etc/sudoers.d/tally) letting fpp restart tally.service only" },
+      { "kind": "privilege", "what": "if WiFi crowd-scan is enabled, runs `ip`/`iw` via sudo to set the configured interface into monitor mode and hop it across channels - relies on FPP's own default broad passwordless-sudo grant for the fpp user rather than adding a new sudoers rule itself; does not touch any other interface" },
       { "kind": "download", "what": "downloads a pretrained MobileNet-SSD object-detection model from download.tensorflow.org" },
       { "kind": "download", "what": "downloads the model's graph/label files from raw.githubusercontent.com" }
     ],
