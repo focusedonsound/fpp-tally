@@ -86,6 +86,26 @@ ini_set('display_errors', '0');
 .diag-gatesens-table th { text-align: left; font-weight: 600; color: #999; padding: .3rem .5rem; border-bottom: 1px solid rgba(255,255,255,0.15); }
 .diag-gatesens-table td { padding: .25rem .5rem; border-bottom: 1px solid rgba(255,255,255,0.06); vertical-align: middle; }
 .diag-gatesens-table input { width: 5rem; }
+.diag-zone-tabs { display: flex; gap: .4rem; margin-bottom: .75rem; }
+.diag-zone-tab { padding: .3rem .8rem; border-radius: .3rem; border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.04); color: inherit; cursor: pointer; font-size: .85rem; }
+.diag-zone-tab.active { background: #36a2eb; border-color: #36a2eb; color: #fff; font-weight: 600; }
+.diag-entrance-lane {
+  position: relative; height: 90px; border-radius: .4rem; overflow: hidden;
+  border: 2px solid rgba(255,255,255,0.15);
+  background-color: #2e2f31;
+  background-image: radial-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), radial-gradient(rgba(0,0,0,0.25) 1px, transparent 1px);
+  background-size: 9px 9px, 13px 13px;
+  background-position: 0 0, 4px 6px;
+}
+.diag-entrance-marker { position: absolute; top: 50%; font-size: 1.7rem; transform: translate(-50%, -50%); transition: left .3s ease, opacity .3s ease; filter: drop-shadow(0 1px 2px rgba(0,0,0,.6)); }
+.diag-entrance-labelrow { display: flex; justify-content: space-between; font-size: .7rem; color: #888; margin-top: .35rem; text-transform: uppercase; letter-spacing: .04em; }
+.diag-hlk-section { border: 1px dashed rgba(255,255,255,0.15); border-radius: .5rem; padding: 1rem; margin-bottom: 1.5rem; }
+.diag-hlk-section > h3 { font-size: 1rem; color: #999; margin-bottom: .75rem; text-transform: uppercase; letter-spacing: .04em; }
+.diag-collapsible-header { cursor: pointer; display: flex; align-items: center; justify-content: space-between; user-select: none; }
+.diag-collapsible-header .diag-chevron { transition: transform .15s ease; color: #999; font-size: .85em; }
+.diag-collapsible-header.collapsed .diag-chevron { transform: rotate(-90deg); }
+.diag-collapsible-body { overflow: hidden; }
+.diag-collapsible-body.collapsed { display: none; }
 </style>
 
 <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
@@ -94,44 +114,173 @@ ini_set('display_errors', '0');
 </div>
 
 <div class="tally-card" id="diagLaneCard">
-  <h4><i class="fas fa-fw fa-road"></i> Lane View</h4>
-  <p class="text-muted small mb-2">
-    Combined read from both radars (they're co-located, so whichever side currently sees a
-    stronger signal in a gate wins). The near lane is closer to the sensors — typically traffic
-    leaving the property; the far lane is the far side of the road — typically incoming traffic.
-    This is a display split only, not used for detection or triggers.
-  </p>
-  <div class="diag-lane-road" id="diagLaneRoad">
-    <div class="diag-lane-mailbox" title="Mailbox / sensor position">📫</div>
-    <div class="diag-lane-divider" id="diagLaneDivider"></div>
-    <div class="diag-lane-half diag-lane-near" id="diagLaneNear">
-      <span class="diag-lane-status" id="diagLaneNearStatus"></span>
+  <h4 class="diag-collapsible-header" id="hdr-lane" onclick="diagToggleSection('lane')">
+    <span><i class="fas fa-fw fa-road"></i> Lane View</span>
+    <i class="fas fa-chevron-down diag-chevron"></i>
+  </h4>
+  <div id="body-lane" class="diag-collapsible-body">
+  <div class="diag-zone-tabs">
+    <button type="button" class="diag-zone-tab active" id="diagZoneTabDriveway" onclick="diagSetZoneTab('driveway')">Driveway (Radar)</button>
+    <button type="button" class="diag-zone-tab" id="diagZoneTabEntrance" onclick="diagSetZoneTab('entrance')">Entrance (Thermal)</button>
+  </div>
+
+  <div id="diagZoneDriveway">
+    <p class="text-muted small mb-2">
+      Combined read from both radars (they're co-located, so whichever side currently sees a
+      stronger signal in a gate wins). The near lane is closer to the sensors — typically traffic
+      leaving the property; the far lane is the far side of the road — typically incoming traffic.
+      This is a display split only, not used for detection or triggers.
+    </p>
+    <div class="diag-lane-road" id="diagLaneRoad">
+      <div class="diag-lane-mailbox" title="Mailbox / sensor position">📫</div>
+      <div class="diag-lane-divider" id="diagLaneDivider"></div>
+      <div class="diag-lane-half diag-lane-near" id="diagLaneNear">
+        <span class="diag-lane-status" id="diagLaneNearStatus"></span>
+      </div>
+      <div class="diag-lane-half diag-lane-far" id="diagLaneFar">
+        <span class="diag-lane-status" id="diagLaneFarStatus"></span>
+      </div>
+      <div class="diag-lane-car" id="diagLaneCar" style="left:0%; opacity:0;">🚗</div>
     </div>
-    <div class="diag-lane-half diag-lane-far" id="diagLaneFar">
-      <span class="diag-lane-status" id="diagLaneFarStatus"></span>
+    <div class="diag-lane-labelrow">
+      <span>Near lane — leaving</span>
+      <span>Far lane — incoming</span>
     </div>
-    <div class="diag-lane-car" id="diagLaneCar" style="left:0%; opacity:0;">🚗</div>
+    <div class="diag-lane-gates" id="diagLaneGates"></div>
+    <div class="d-flex align-items-center gap-2 flex-wrap mt-2">
+      <label class="small text-muted mb-0" for="diagLaneSplit">Near/far split (gate)</label>
+      <input type="number" id="diagLaneSplit" class="form-control form-control-sm" style="width:5rem;" min="1" max="8" value="4" oninput="diagRedrawGateBars()">
+      <button type="button" class="tally-btn tally-btn-sm" onclick="diagSaveLaneSplit()">
+        <i class="fas fa-floppy-disk"></i> Save &amp; Apply
+      </button>
+      <span class="small" id="diagLaneSplitStatus"></span>
+    </div>
+    <div class="diag-lastpass text-muted" id="diagLastPass">No pass recorded yet this session.</div>
   </div>
-  <div class="diag-lane-labelrow">
-    <span>Near lane — leaving</span>
-    <span>Far lane — incoming</span>
+
+  <div id="diagZoneEntrance" style="display:none;">
+    <p class="text-muted small mb-2">
+      Single-lane read from the thermal camera's tracked heat signature position across the sensor's
+      32-column field of view. Direction is inferred live from which way that position is
+      trending between polls, not a logged pass history — see the Thermal card below for the raw
+      delta grid this comes from.
+    </p>
+    <div class="diag-entrance-lane" id="diagEntranceLane">
+      <div class="diag-entrance-marker" id="diagEntranceMarker" style="left:50%; opacity:0;">🚶</div>
+    </div>
+    <div class="diag-entrance-labelrow">
+      <span id="diagEntranceLabelA">Inbound</span>
+      <span id="diagEntranceLabelB">Outbound</span>
+    </div>
+    <div class="text-muted small mt-2" id="diagEntranceStatus">No thermal target currently tracked.</div>
   </div>
-  <div class="diag-lane-gates" id="diagLaneGates"></div>
-  <div class="d-flex align-items-center gap-2 flex-wrap mt-2">
-    <label class="small text-muted mb-0" for="diagLaneSplit">Near/far split (gate)</label>
-    <input type="number" id="diagLaneSplit" class="form-control form-control-sm" style="width:5rem;" min="1" max="8" value="4" oninput="diagRedrawGateBars()">
-    <button type="button" class="tally-btn tally-btn-sm" onclick="diagSaveLaneSplit()">
-      <i class="fas fa-floppy-disk"></i> Save &amp; Apply
-    </button>
-    <span class="small" id="diagLaneSplitStatus"></span>
   </div>
-  <div class="diag-lastpass text-muted" id="diagLastPass">No pass recorded yet this session.</div>
+</div>
+
+<div class="diag-hlk-section">
+  <h3 class="diag-collapsible-header" id="hdr-hlk" onclick="diagToggleSection('hlk')">
+    <span><i class="fas fa-fw fa-satellite-dish"></i> HLK Radar (LD2410B) — Detection &amp; Tuning</span>
+    <i class="fas fa-chevron-down diag-chevron"></i>
+  </h3>
+  <div id="body-hlk" class="diag-collapsible-body">
+
+  <div class="tally-card" id="diagLd2410Card">
+    <h4><i class="fas fa-fw fa-satellite-dish"></i> Per-Gate Readout</h4>
+    <div class="diag-legend">
+      <span class="sw" style="background:#36a2eb;"></span> Moving energy
+      &nbsp;&nbsp;<span class="sw" style="background:#ff9f40;"></span> Static energy
+      &nbsp;&nbsp;each gate ≈ 0.75&nbsp;m, gate 0 nearest the sensor
+    </div>
+    <div class="diag-threshold-box mb-3">
+      <div class="d-flex align-items-center gap-2 flex-wrap">
+        <label class="small text-muted mb-0" for="diagMinEnergy">Detection threshold (min_energy)</label>
+        <input type="number" id="diagMinEnergy" class="form-control form-control-sm" style="width:6rem;" min="0" max="500" value="20" oninput="diagRedrawGateBars()">
+        <button type="button" class="tally-btn tally-btn-sm" onclick="diagSaveMinEnergy()">
+          <i class="fas fa-floppy-disk"></i> Save &amp; Apply
+        </button>
+        <span class="small" id="diagMinEnergyStatus"></span>
+      </div>
+      <div class="text-muted small mt-1">
+        The dashed line on each bar is this threshold. A gate crossing it (highlighted) is what Tally's own
+        software applies on top of whichever gate reads highest, in addition to (not instead of) the radar's
+        own native per-gate sensitivity below. Adjusting the number updates the line immediately so you can
+        see the effect before saving; <strong>Save &amp; Apply</strong> writes it to the config and restarts
+        the daemon so real detection actually uses it.
+      </div>
+    </div>
+    <div id="diagLd2410Body" class="row g-4">
+      <div class="col-12 text-muted small">Loading…</div>
+    </div>
+  </div>
+
+  <div class="tally-card" id="diagGateSensCard">
+    <h4><i class="fas fa-fw fa-sliders"></i> Per-Gate Sensitivity (native radar filtering)</h4>
+    <p class="text-muted small mb-2">
+      This is the same per-gate sensitivity the official HLK config tool exposes — a real setting written to
+      the radar's own memory (persists across power cycles), applied by the radar itself before Tally ever sees
+      the data. Higher sensitivity number = <strong>less</strong> sensitive (a gate's energy has to clear that
+      number before the radar reports a target there at all) — useful for silencing a specific gate that keeps
+      picking up wind-blown branches or a neighbor's fixture, without dialing back detection everywhere.
+    </p>
+    <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
+      <label class="small text-muted mb-0">Side</label>
+      <select id="diagGateSensSide" class="form-control form-control-sm" style="width:6rem;" onchange="diagGateSensClear()">
+        <option value="A">A</option>
+        <option value="B">B</option>
+      </select>
+      <button type="button" class="tally-btn tally-btn-sm" onclick="diagReadGateSens()">
+        <i class="fas fa-arrows-rotate"></i> Read Current Values
+      </button>
+      <span class="small" id="diagGateSensStatus"></span>
+    </div>
+    <div id="diagGateSensBody" class="text-muted small">Click "Read Current Values" to load this side's current per-gate sensitivity from the radar.</div>
+  </div>
+
+  <div class="tally-card mb-0" id="diagCamTuneCard">
+    <h4><i class="fas fa-fw fa-car"></i> Camera-Assisted Tuning</h4>
+    <p class="text-muted small mb-2">
+      When the camera module is enabled, every radar pass gets a best-effort camera classification
+      (car/truck/bus vs. person/dog/cat/...) paired with that pass's peak gate energy. Once enough of both
+      kinds have been seen, this suggests a <code>min_energy</code> threshold that would have kept every
+      vehicle observed while excluding everything else — it's only a suggestion; nothing here changes
+      detection until you press Apply.
+    </p>
+    <div id="diagCamTuneDisabled" class="text-muted small" style="display:none;">
+      Camera module not enabled in Setup — enable it to start collecting samples.
+    </div>
+    <div id="diagCamTuneBody" style="display:none;">
+      <div class="small text-muted mb-2" id="diagCamTuneLast">No classification yet this session.</div>
+      <div class="d-flex flex-wrap gap-4 mb-2">
+        <div>
+          <div class="small text-muted">Vehicle samples</div>
+          <div id="diagCamTuneVehicleStats">—</div>
+        </div>
+        <div>
+          <div class="small text-muted">Non-vehicle samples</div>
+          <div id="diagCamTuneNonVehicleStats">—</div>
+        </div>
+      </div>
+      <div class="d-flex align-items-center gap-2 flex-wrap">
+        <span class="small" id="diagCamTuneSuggestion">Collecting data…</span>
+        <button type="button" class="tally-btn tally-btn-sm" id="diagCamTuneApplyBtn" onclick="diagCamTuneApply()" disabled>
+          <i class="fas fa-check"></i> Apply Suggested Threshold
+        </button>
+        <span class="small" id="diagCamTuneApplyStatus"></span>
+      </div>
+    </div>
+  </div>
+
+  </div>
 </div>
 
 <div class="row">
   <div class="col-lg-5">
     <div class="tally-card" id="diagCamCard">
-      <h4><i class="fas fa-fw fa-camera"></i> Camera Reference</h4>
+      <h4 class="diag-collapsible-header" id="hdr-cam" onclick="diagToggleSection('cam')">
+        <span><i class="fas fa-fw fa-camera"></i> Camera Reference</span>
+        <i class="fas fa-chevron-down diag-chevron"></i>
+      </h4>
+      <div id="body-cam" class="diag-collapsible-body">
       <div class="diag-cam-frame">
         <img id="diagCamImg" alt="camera preview" style="display:none;">
         <span id="diagCamMsg" class="text-muted small">Loading…</span>
@@ -145,112 +294,125 @@ ini_set('display_errors', '0');
         </button>
         <div class="text-danger small mt-1" id="diagCamAuthError"></div>
       </div>
+      <hr class="my-3" style="border-color: rgba(255,255,255,0.1);">
+      <h4 class="mb-2"><i class="fas fa-fw fa-sliders"></i> White Balance</h4>
+      <div class="diag-threshold-box">
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <label class="small text-muted mb-0" for="diagCamAwbMode">Mode</label>
+          <select id="diagCamAwbMode" class="form-control form-control-sm" style="width:9rem;" onchange="diagCamAwbModeChanged()">
+            <option value="auto">Auto</option>
+            <option value="daylight">Daylight</option>
+            <option value="cloudy">Cloudy</option>
+            <option value="indoor">Indoor</option>
+            <option value="tungsten">Tungsten</option>
+            <option value="incandescent">Incandescent</option>
+            <option value="fluorescent">Fluorescent</option>
+            <option value="custom">Custom gains</option>
+          </select>
+          <span id="diagCamAwbGainsWrap" style="display:none;">
+            <label class="small text-muted mb-0" for="diagCamAwbRed">R</label>
+            <input type="number" id="diagCamAwbRed" class="form-control form-control-sm" style="width:4.5rem;" step="0.05" min="0.1" max="8" placeholder="1.5">
+            <label class="small text-muted mb-0" for="diagCamAwbBlue">B</label>
+            <input type="number" id="diagCamAwbBlue" class="form-control form-control-sm" style="width:4.5rem;" step="0.05" min="0.1" max="8" placeholder="1.2">
+          </span>
+          <button type="button" class="tally-btn tally-btn-sm" onclick="diagSaveCameraAwb()">
+            <i class="fas fa-floppy-disk"></i> Save &amp; Apply
+          </button>
+          <span class="small" id="diagCamAwbStatus"></span>
+        </div>
+        <div class="text-muted small mt-1" id="diagCamAwbNote">
+          Only affects the CSI/Pi Camera Module path (rpicam's own AWB control) — a USB webcam ignores this.
+          "Custom gains" disables auto white balance entirely in favor of fixed red/blue multipliers
+          (rpicam-still/-vid's <code>--awbgains</code>); higher red = warmer, higher blue = cooler.
+        </div>
+      </div>
+      </div>
     </div>
   </div>
   <div class="col-lg-7">
-    <div class="tally-card" id="diagLd2410Card">
-      <h4><i class="fas fa-fw fa-satellite-dish"></i> LD2410B Radar — Per-Gate Readout</h4>
-      <div class="diag-legend">
-        <span class="sw" style="background:#36a2eb;"></span> Moving energy
-        &nbsp;&nbsp;<span class="sw" style="background:#ff9f40;"></span> Static energy
-        &nbsp;&nbsp;each gate ≈ 0.75&nbsp;m, gate 0 nearest the sensor
+    <div class="tally-card" id="diagThermalCard">
+      <h4 class="diag-collapsible-header" id="hdr-thermal" onclick="diagToggleSection('thermal')">
+        <span><i class="fas fa-fw fa-fire"></i> MLX90640 Thermal — Delta Grid &amp; Tuning</span>
+        <i class="fas fa-chevron-down diag-chevron"></i>
+      </h4>
+      <div id="body-thermal" class="diag-collapsible-body">
+      <div id="diagThermalBody">
+        <div class="text-muted small">Loading…</div>
       </div>
-      <div class="diag-threshold-box mb-3">
-        <div class="d-flex align-items-center gap-2 flex-wrap">
-          <label class="small text-muted mb-0" for="diagMinEnergy">Detection threshold (min_energy)</label>
-          <input type="number" id="diagMinEnergy" class="form-control form-control-sm" style="width:6rem;" min="0" max="500" value="20" oninput="diagRedrawGateBars()">
-          <button type="button" class="tally-btn tally-btn-sm" onclick="diagSaveMinEnergy()">
-            <i class="fas fa-floppy-disk"></i> Save &amp; Apply
-          </button>
-          <span class="small" id="diagMinEnergyStatus"></span>
+      <hr class="my-3" style="border-color: rgba(255,255,255,0.1);">
+      <h4 class="mb-2"><i class="fas fa-fw fa-sliders"></i> Thermal Tuning</h4>
+      <div id="diagThermalTuneDisabled" class="text-muted small" style="display:none;">
+        Thermal module not enabled in Setup.
+      </div>
+      <div id="diagThermalTuneBody" class="diag-threshold-box" style="display:none;">
+        <div class="row g-2">
+          <div class="col-sm-6">
+            <label class="small text-muted mb-0" for="diagThDeltaThreshold">Foreground threshold (°C)</label>
+            <div class="d-flex align-items-center gap-1">
+              <input type="number" id="diagThDeltaThreshold" class="form-control form-control-sm" step="0.1" min="0.1" max="20">
+              <button type="button" class="tally-btn tally-btn-sm" onclick="diagSaveThermalParam('delta_threshold_c', document.getElementById('diagThDeltaThreshold').value)"><i class="fas fa-floppy-disk"></i></button>
+            </div>
+          </div>
+          <div class="col-sm-6">
+            <label class="small text-muted mb-0" for="diagThMinBlob">Min blob size (px)</label>
+            <div class="d-flex align-items-center gap-1">
+              <input type="number" id="diagThMinBlob" class="form-control form-control-sm" step="1" min="1" max="200">
+              <button type="button" class="tally-btn tally-btn-sm" onclick="diagSaveThermalParam('min_blob_size', document.getElementById('diagThMinBlob').value)"><i class="fas fa-floppy-disk"></i></button>
+            </div>
+          </div>
+          <div class="col-sm-6">
+            <label class="small text-muted mb-0" for="diagThMinTravel">Min travel to log a pass (cols)</label>
+            <div class="d-flex align-items-center gap-1">
+              <input type="number" id="diagThMinTravel" class="form-control form-control-sm" step="0.5" min="0.5" max="32">
+              <button type="button" class="tally-btn tally-btn-sm" onclick="diagSaveThermalParam('min_travel_cols', document.getElementById('diagThMinTravel').value)"><i class="fas fa-floppy-disk"></i></button>
+            </div>
+          </div>
+          <div class="col-sm-6">
+            <label class="small text-muted mb-0" for="diagThParked">Parked timeout (s)</label>
+            <div class="d-flex align-items-center gap-1">
+              <input type="number" id="diagThParked" class="form-control form-control-sm" step="1" min="5" max="3600">
+              <button type="button" class="tally-btn tally-btn-sm" onclick="diagSaveThermalParam('parked_timeout_s', document.getElementById('diagThParked').value)"><i class="fas fa-floppy-disk"></i></button>
+            </div>
+          </div>
+          <div class="col-sm-6">
+            <label class="small text-muted mb-0" for="diagThMountDist">Mount distance (m)</label>
+            <div class="d-flex align-items-center gap-1">
+              <input type="number" id="diagThMountDist" class="form-control form-control-sm" step="0.1" min="0.3" max="50">
+              <button type="button" class="tally-btn tally-btn-sm" onclick="diagSaveThermalParam('mount_distance_m', document.getElementById('diagThMountDist').value)"><i class="fas fa-floppy-disk"></i></button>
+            </div>
+          </div>
+          <div class="col-sm-6 d-flex align-items-end">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" id="diagThFlip" onchange="diagSaveThermalParam('flip_direction', document.getElementById('diagThFlip').checked)">
+              <label class="form-check-label small text-muted" for="diagThFlip">Flip direction labels</label>
+            </div>
+          </div>
         </div>
-        <div class="text-muted small mt-1">
-          The dashed line on each bar is this threshold. A gate crossing it (highlighted) is what Tally's own
-          software applies on top of whichever gate reads highest, in addition to (not instead of) the radar's
-          own native per-gate sensitivity below. Adjusting the number updates the line immediately so you can
-          see the effect before saving; <strong>Save &amp; Apply</strong> writes it to the config and restarts
-          the daemon so real detection actually uses it.
-        </div>
+        <div class="text-muted small mt-2" id="diagThermalTuneStatus">Each field saves and restarts the daemon on its own — no separate Apply step.</div>
       </div>
-      <div id="diagLd2410Body" class="row g-4">
-        <div class="col-12 text-muted small">Loading…</div>
       </div>
     </div>
-  </div>
-</div>
-
-<div class="tally-card" id="diagGateSensCard">
-  <h4><i class="fas fa-fw fa-sliders"></i> Per-Gate Sensitivity (native radar filtering)</h4>
-  <p class="text-muted small mb-2">
-    This is the same per-gate sensitivity the official HLK config tool exposes — a real setting written to
-    the radar's own memory (persists across power cycles), applied by the radar itself before Tally ever sees
-    the data. Higher sensitivity number = <strong>less</strong> sensitive (a gate's energy has to clear that
-    number before the radar reports a target there at all) — useful for silencing a specific gate that keeps
-    picking up wind-blown branches or a neighbor's fixture, without dialing back detection everywhere.
-  </p>
-  <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
-    <label class="small text-muted mb-0">Side</label>
-    <select id="diagGateSensSide" class="form-control form-control-sm" style="width:6rem;" onchange="diagGateSensClear()">
-      <option value="A">A</option>
-      <option value="B">B</option>
-    </select>
-    <button type="button" class="tally-btn tally-btn-sm" onclick="diagReadGateSens()">
-      <i class="fas fa-arrows-rotate"></i> Read Current Values
-    </button>
-    <span class="small" id="diagGateSensStatus"></span>
-  </div>
-  <div id="diagGateSensBody" class="text-muted small">Click "Read Current Values" to load this side's current per-gate sensitivity from the radar.</div>
-</div>
-
-<div class="tally-card" id="diagCamTuneCard">
-  <h4><i class="fas fa-fw fa-car"></i> Camera-Assisted Tuning</h4>
-  <p class="text-muted small mb-2">
-    When the camera module is enabled, every radar pass gets a best-effort camera classification
-    (car/truck/bus vs. person/dog/cat/...) paired with that pass's peak gate energy. Once enough of both
-    kinds have been seen, this suggests a <code>min_energy</code> threshold that would have kept every
-    vehicle observed while excluding everything else — it's only a suggestion; nothing here changes
-    detection until you press Apply.
-  </p>
-  <div id="diagCamTuneDisabled" class="text-muted small" style="display:none;">
-    Camera module not enabled in Setup — enable it to start collecting samples.
-  </div>
-  <div id="diagCamTuneBody" style="display:none;">
-    <div class="small text-muted mb-2" id="diagCamTuneLast">No classification yet this session.</div>
-    <div class="d-flex flex-wrap gap-4 mb-2">
-      <div>
-        <div class="small text-muted">Vehicle samples</div>
-        <div id="diagCamTuneVehicleStats">—</div>
-      </div>
-      <div>
-        <div class="small text-muted">Non-vehicle samples</div>
-        <div id="diagCamTuneNonVehicleStats">—</div>
-      </div>
-    </div>
-    <div class="d-flex align-items-center gap-2 flex-wrap">
-      <span class="small" id="diagCamTuneSuggestion">Collecting data…</span>
-      <button type="button" class="tally-btn tally-btn-sm" id="diagCamTuneApplyBtn" onclick="diagCamTuneApply()" disabled>
-        <i class="fas fa-check"></i> Apply Suggested Threshold
-      </button>
-      <span class="small" id="diagCamTuneApplyStatus"></span>
-    </div>
-  </div>
-</div>
-
-<div class="tally-card" id="diagThermalCard">
-  <h4><i class="fas fa-fw fa-fire"></i> MLX90640 Thermal — Delta Grid</h4>
-  <div id="diagThermalBody">
-    <div class="text-muted small">Loading…</div>
   </div>
 </div>
 
 <div class="tally-card" id="diagBleCard">
-  <h4><i class="fas fa-fw fa-bluetooth-b"></i> Raw BLE Scan</h4>
+  <h4 class="diag-collapsible-header" id="hdr-ble" onclick="diagToggleSection('ble')">
+    <span><i class="fas fa-fw fa-bluetooth-b"></i> Raw BLE Scan</span>
+    <i class="fas fa-chevron-down diag-chevron"></i>
+  </h4>
+  <div id="body-ble" class="diag-collapsible-body">
   <div id="diagBleBody" class="text-muted small">Loading…</div>
+  </div>
 </div>
 
 <div class="tally-card" id="diagWifiCard">
-  <h4><i class="fas fa-fw fa-wifi"></i> Raw WiFi Probe-Request Scan</h4>
+  <h4 class="diag-collapsible-header" id="hdr-wifi" onclick="diagToggleSection('wifi')">
+    <span><i class="fas fa-fw fa-wifi"></i> Raw WiFi Probe-Request Scan</span>
+    <i class="fas fa-chevron-down diag-chevron"></i>
+  </h4>
+  <div id="body-wifi" class="diag-collapsible-body">
   <div id="diagWifiBody" class="text-muted small">Loading…</div>
+  </div>
 </div>
 
 <script>
@@ -493,7 +655,206 @@ function diagRenderThermal(bodyEl, data, moduleEnabled) {
   const meta = document.getElementById('diagThermalMeta');
   if (meta) {
     const stale = data.stale ? diagBadge('Stale', 'tally-badge-stale') : '';
-    meta.innerHTML = `${(data.blobs || []).length} blob(s) above threshold${data.tracking ? ` — tracking (dwell ${data.track_dwell_s ?? 0}s)` : ''} ${stale}`;
+    // "blob" is the correct computer-vision term for the underlying
+    // connected-component detection (see thermal.py's find_blobs) and
+    // stays that way in code/config field names, but showing it verbatim
+    // on a page a real person might be looking at themselves on (this is
+    // a body-heat tracker, after all) reads as needlessly clinical --
+    // "heat signature" says the same thing without the "you are an
+    // object" framing.
+    const blobCount = (data.blobs || []).length;
+    meta.innerHTML = `${blobCount} heat signature${blobCount === 1 ? '' : 's'} detected${data.tracking ? ` — tracking (dwell ${data.track_dwell_s ?? 0}s)` : ''} ${stale}`;
+  }
+}
+
+// --- Collapsible sections -------------------------------------------------
+// Persisted per-browser via localStorage so a collapsed section (e.g. HLK
+// radar tuning on a build that only uses the thermal camera) stays
+// collapsed across reloads instead of resetting every visit. Sections not
+// yet in localStorage default to expanded, except the ones listed in
+// DIAG_DEFAULT_COLLAPSED -- this build's stated intent is thermal+camera
+// only, with the HLK/BLE/WiFi sections kept as optional/unused extras, so
+// those start collapsed on a first-ever visit rather than expanded.
+const DIAG_DEFAULT_COLLAPSED = ['hlk', 'ble', 'wifi'];
+
+function diagSectionCollapsed(id) {
+  try {
+    const stored = localStorage.getItem('tally-diag-collapsed-' + id);
+    if (stored != null) return stored === '1';
+  } catch (e) { /* private mode / blocked storage -- fall through to default */ }
+  return DIAG_DEFAULT_COLLAPSED.includes(id);
+}
+
+function diagApplyCollapsed(id, collapsed) {
+  const header = document.getElementById('hdr-' + id);
+  const body = document.getElementById('body-' + id);
+  if (!header || !body) return;
+  body.classList.toggle('collapsed', collapsed);
+  header.classList.toggle('collapsed', collapsed);
+}
+
+function diagToggleSection(id) {
+  const collapsed = !diagSectionCollapsed(id);
+  diagApplyCollapsed(id, collapsed);
+  try { localStorage.setItem('tally-diag-collapsed-' + id, collapsed ? '1' : '0'); } catch (e) { /* ignore */ }
+}
+
+function diagInitCollapsibles() {
+  document.querySelectorAll('.diag-collapsible-body').forEach(body => {
+    const id = body.id.replace(/^body-/, '');
+    diagApplyCollapsed(id, diagSectionCollapsed(id));
+  });
+}
+
+// --- Zone tabs (Lane View: Driveway/radar vs Entrance/thermal) -----------
+let diagActiveZoneTab = 'driveway';
+function diagSetZoneTab(zone) {
+  diagActiveZoneTab = zone;
+  document.getElementById('diagZoneDriveway').style.display = zone === 'driveway' ? '' : 'none';
+  document.getElementById('diagZoneEntrance').style.display = zone === 'entrance' ? '' : 'none';
+  document.getElementById('diagZoneTabDriveway').classList.toggle('active', zone === 'driveway');
+  document.getElementById('diagZoneTabEntrance').classList.toggle('active', zone === 'entrance');
+}
+
+// Direction is inferred client-side by comparing this poll's tracked
+// column against the previous poll's -- the daemon's live-state file
+// only carries the current blob position/dwell, not a velocity or a
+// completed-pass log the way ld2410's last_pass is, so there's nothing
+// server-side to read a direction from between polls.
+let diagEntrancePrevCol = null;
+function diagRenderEntranceLane(thermalData, moduleEnabled) {
+  const marker = document.getElementById('diagEntranceMarker');
+  const statusEl = document.getElementById('diagEntranceStatus');
+  if (!moduleEnabled) {
+    marker.style.opacity = '0';
+    statusEl.textContent = 'Thermal module not enabled in Setup.';
+    diagEntrancePrevCol = null;
+    return;
+  }
+  const blobs = (thermalData && thermalData.blobs) || [];
+  if (!thermalData || !blobs.length) {
+    marker.style.opacity = '0';
+    statusEl.textContent = thermalData && thermalData.stale
+      ? 'Thermal data is stale — check the daemon/sensor.'
+      : 'No thermal target currently tracked.';
+    diagEntrancePrevCol = null;
+    return;
+  }
+  const cols = thermalData.cols || 32;
+  const col = blobs[0].col;
+  const pct = (col / (cols - 1)) * 100;
+  marker.style.left = pct + '%';
+  marker.style.opacity = '1';
+
+  let trend = '';
+  if (diagEntrancePrevCol != null) {
+    const d = col - diagEntrancePrevCol;
+    if (d > 0.3) trend = ' — moving toward Outbound';
+    else if (d < -0.3) trend = ' — moving toward Inbound';
+  }
+  diagEntrancePrevCol = col;
+
+  const dwell = thermalData.track_dwell_s ?? 0;
+  const stale = thermalData.stale ? ' ' + diagBadge('Stale', 'tally-badge-stale') : '';
+  statusEl.innerHTML = `Tracking — dwell ${dwell}s${trend}${stale}`;
+}
+
+// --- Thermal tuning --------------------------------------------------------
+let diagThermalTuneInitDone = false;
+function diagInitThermalTune(cfg) {
+  if (diagThermalTuneInitDone || !cfg) return;
+  diagThermalTuneInitDone = true;
+  document.getElementById('diagThDeltaThreshold').value = cfg.delta_threshold_c;
+  document.getElementById('diagThMinBlob').value = cfg.min_blob_size;
+  document.getElementById('diagThMinTravel').value = cfg.min_travel_cols;
+  document.getElementById('diagThParked').value = cfg.parked_timeout_s;
+  document.getElementById('diagThMountDist').value = cfg.mount_distance_m;
+  document.getElementById('diagThFlip').checked = !!cfg.flip_direction;
+}
+
+async function diagSaveThermalParam(field, value) {
+  const statusEl = document.getElementById('diagThermalTuneStatus');
+  statusEl.textContent = 'Saving…';
+  try {
+    const fd = new FormData();
+    fd.append('action', 'set_thermal_param');
+    fd.append('field', field);
+    fd.append('value', value);
+    const res = await fetch('plugin.php?plugin=fpp-tally&page=www/diag_tune.php&nopage=1', { method: 'POST', body: fd, cache: 'no-store' });
+    const data = await res.json();
+    if (data.status !== 'OK') {
+      statusEl.textContent = 'Error: ' + (data.message || 'save failed');
+      return;
+    }
+    statusEl.textContent = 'Saved — restarting daemon…';
+    const fd2 = new FormData();
+    fd2.append('action', 'restart');
+    await fetch('plugin.php?plugin=fpp-tally&page=www/control.php&nopage=1', { method: 'POST', body: fd2, cache: 'no-store' });
+    statusEl.textContent = 'Applied.';
+    setTimeout(() => { statusEl.textContent = 'Each field saves and restarts the daemon on its own — no separate Apply step.'; }, 4000);
+  } catch (e) {
+    statusEl.textContent = 'Request failed.';
+  }
+}
+
+// --- Camera white balance --------------------------------------------------
+let diagCamAwbInitDone = false;
+
+function diagCamAwbModeChanged() {
+  const mode = document.getElementById('diagCamAwbMode').value;
+  document.getElementById('diagCamAwbGainsWrap').style.display = mode === 'custom' ? '' : 'none';
+}
+
+function diagInitCameraAwb(camData) {
+  if (diagCamAwbInitDone || !camData) return;
+  diagCamAwbInitDone = true;
+  const mode = camData.awb_mode || 'auto';
+  document.getElementById('diagCamAwbMode').value = mode;
+  if (camData.awb_gains) {
+    const parts = camData.awb_gains.split(',');
+    document.getElementById('diagCamAwbRed').value = parts[0] || '';
+    document.getElementById('diagCamAwbBlue').value = parts[1] || '';
+  }
+  diagCamAwbModeChanged();
+  if (camData.is_csi === false) {
+    document.getElementById('diagCamAwbNote').innerHTML =
+      '<strong>USB camera detected</strong> — white balance has no effect on this backend, only on a CSI/Pi Camera Module. Settings below will save but won\'t change anything until a CSI camera is used.';
+  }
+}
+
+async function diagSaveCameraAwb() {
+  const statusEl = document.getElementById('diagCamAwbStatus');
+  const mode = document.getElementById('diagCamAwbMode').value;
+  let gains = '';
+  if (mode === 'custom') {
+    const r = document.getElementById('diagCamAwbRed').value;
+    const b = document.getElementById('diagCamAwbBlue').value;
+    if (!r || !b) {
+      statusEl.textContent = 'Error: both R and B gains are required for custom mode.';
+      return;
+    }
+    gains = `${r},${b}`;
+  }
+  statusEl.textContent = 'Saving…';
+  try {
+    const fd = new FormData();
+    fd.append('action', 'set_camera_wb');
+    fd.append('awb_mode', mode);
+    fd.append('awb_gains', gains);
+    const res = await fetch('plugin.php?plugin=fpp-tally&page=www/diag_tune.php&nopage=1', { method: 'POST', body: fd, cache: 'no-store' });
+    const data = await res.json();
+    if (data.status !== 'OK') {
+      statusEl.textContent = 'Error: ' + (data.message || 'save failed');
+      return;
+    }
+    statusEl.textContent = 'Saved — restarting daemon…';
+    const fd2 = new FormData();
+    fd2.append('action', 'restart');
+    await fetch('plugin.php?plugin=fpp-tally&page=www/control.php&nopage=1', { method: 'POST', body: fd2, cache: 'no-store' });
+    statusEl.textContent = 'Applied.';
+    setTimeout(() => { statusEl.textContent = ''; }, 4000);
+  } catch (e) {
+    statusEl.textContent = 'Request failed.';
   }
 }
 
@@ -909,6 +1270,8 @@ async function diagPoll() {
     document.getElementById('diagLaneSplit').value = data.ld2410.lane_split_gate;
   }
 
+  diagInitCameraAwb(data.camera);
+
   if (!diagCamInitDone) {
     diagCamInitDone = true;
     diagCamRequirePassword = !!(data.camera && data.camera.require_password);
@@ -956,12 +1319,18 @@ async function diagPoll() {
   }
 
   diagRenderThermal(document.getElementById('diagThermalBody'), data.thermal, data.modules.thermal);
+  diagRenderEntranceLane(data.thermal, data.modules.thermal);
+
+  document.getElementById('diagThermalTuneDisabled').style.display = data.modules.thermal ? 'none' : '';
+  document.getElementById('diagThermalTuneBody').style.display = data.modules.thermal ? '' : 'none';
+  if (data.modules.thermal) diagInitThermalTune(data.thermal_config);
 
   diagBleTable(document.getElementById('diagBleBody'), data.crowd_ble, data.modules.crowd_ble);
   diagWifiTable(document.getElementById('diagWifiBody'), data.crowd_wifi, data.modules.crowd_wifi,
     `Interface: ${data.wifi_interface}. Requires monitor mode + elevated privileges — see the Setup page's Crowd Scan Config warning if this stays empty.`);
 }
 
+diagInitCollapsibles();
 diagPoll();
 const diagInterval = setInterval(diagPoll, 1000);
 // Sample-count/suggestion stats change slowly (one classification every

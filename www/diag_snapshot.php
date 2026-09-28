@@ -178,7 +178,19 @@ if ($lockFp === false || !flock($lockFp, LOCK_EX | LOCK_NB)) {
 $csiCacheFile = "/home/fpp/media/plugins/fpp-tally/state/camera_backend_detect.json";
 if (diag_detect_csi($csiCacheFile)) {
     $stillBin = trim((string)(shell_exec('command -v rpicam-still 2>/dev/null') ?: shell_exec('command -v libcamera-still 2>/dev/null')));
-    $cmd = 'timeout 5 ' . escapeshellarg($stillBin ?: 'rpicam-still') . ' -t 300 -o - 2>/dev/null';
+    $cmd = 'timeout 5 ' . escapeshellarg($stillBin ?: 'rpicam-still') . ' -t 300 -o -';
+    // Same AWB precedence as camera.py's own CSI stream command --
+    // explicit gains win over a named mode, "auto" (the default) adds
+    // nothing since that's rpicam-still's own default behavior anyway.
+    $awbGains = trim((string)($cfg['camera']['awb_gains'] ?? ''));
+    $awbMode  = strtolower(trim((string)($cfg['camera']['awb_mode'] ?? 'auto')));
+    $validAwbModes = ['auto', 'incandescent', 'tungsten', 'fluorescent', 'indoor', 'daylight', 'cloudy', 'custom'];
+    if ($awbGains !== '' && preg_match('/^\d+(\.\d+)?,\d+(\.\d+)?$/', $awbGains)) {
+        $cmd .= ' --awbgains ' . escapeshellarg($awbGains);
+    } elseif ($awbMode !== 'auto' && in_array($awbMode, $validAwbModes, true)) {
+        $cmd .= ' --awb ' . escapeshellarg($awbMode);
+    }
+    $cmd .= ' 2>/dev/null';
 } else {
     $cmd = 'timeout 5 ffmpeg -f v4l2 -i ' . escapeshellarg($device) .
            ' -frames:v 1 -q:v 5 -f mjpeg -y - 2>/dev/null';

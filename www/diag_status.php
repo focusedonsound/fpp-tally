@@ -59,6 +59,18 @@ $result = [
     ],
     "wifi_interface" => $cs['wifi_interface'] ?? 'wlan0',
     "ld2410_min_energy" => (int)($cfg['ld2410']['min_energy'] ?? 20),
+    // Current tunable thermal params, for the Diagnostics page's Thermal
+    // Tuning card to pre-populate its inputs from -- same idea as
+    // ld2410_min_energy above, just multiple fields at once since thermal
+    // has several independent knobs instead of one.
+    "thermal_config" => [
+        "delta_threshold_c" => $cfg['thermal']['delta_threshold_c'] ?? 2.0,
+        "min_blob_size"     => (int)($cfg['thermal']['min_blob_size'] ?? 6),
+        "min_travel_cols"   => $cfg['thermal']['min_travel_cols'] ?? 4,
+        "parked_timeout_s"  => (int)($cfg['thermal']['parked_timeout_s'] ?? 180),
+        "mount_distance_m"  => $cfg['thermal']['mount_distance_m'] ?? 5.0,
+        "flip_direction"    => !empty($cfg['thermal']['flip_direction']),
+    ],
     "camera"         => [
         "require_password" => !empty($calib['require_password_on_diagnostics']),
         // Auto-tuning-assist classifier's live readout -- see camera.py.
@@ -66,6 +78,18 @@ $result = [
         // above; both live under "camera" since they're both camera
         // related, but they're otherwise unconnected features.
         "classify" => withStale(readJsonFile("$STATE_DIR/camera_live.json"), 10.0),
+        "awb_mode"  => $cfg['camera']['awb_mode'] ?? 'auto',
+        "awb_gains" => $cfg['camera']['awb_gains'] ?? '',
+        // White balance only does anything on the CSI/rpicam path (see
+        // camera.py) -- surfaced here so the Diagnostics page can tell
+        // the user their WB setting is a no-op on a USB webcam instead
+        // of silently doing nothing. Same detection cache diag_snapshot.php
+        // writes/reads; a missing/expired cache just reads as unknown
+        // (null) rather than guessing.
+        "is_csi"    => (function () {
+            $c = @json_decode(@file_get_contents("/home/fpp/media/plugins/fpp-tally/state/camera_backend_detect.json"), true);
+            return (is_array($c) && isset($c['is_csi'])) ? (bool)$c['is_csi'] : null;
+        })(),
     ],
     "ld2410"         => withStale(readJsonFile("$STATE_DIR/ld2410_live.json")),
     "crowd_ble"      => withStale(readJsonFile("$STATE_DIR/crowd_ble_live.json")),

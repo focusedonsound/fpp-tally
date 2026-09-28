@@ -132,6 +132,12 @@ FRAME_FILE_MAX_AGE_S = 5.0
 # a loud warning -- generous enough to cover the slowest real case seen
 # (CSI camera startup measured at ~6-7s), not just USB.
 _NO_FRAME_WARNING_AFTER_S = 15.0
+# rpicam-still/rpicam-vid's own --awb enum (confirmed against a real
+# rpicam-still --help on .49) -- validated against here rather than
+# passed through unchecked, since an invalid value makes rpicam-vid exit
+# immediately with no frames at all rather than a clean error this
+# module could surface.
+_AWB_MODES = {"auto", "incandescent", "tungsten", "fluorescent", "indoor", "daylight", "cloudy", "custom"}
 
 
 def _load_labels(path: str) -> List[str]:
@@ -204,6 +210,17 @@ class CameraModule(SensorModule):
         # binding throttle rather than a number smaller than reality.
         min_interval_s = float(cam_cfg.get("min_interval_s", 6))
         confidence_threshold = float(cam_cfg.get("confidence_threshold", 0.5))
+        # White balance -- CSI-only (rpicam-vid's own --awb/--awbgains;
+        # the USB/ffmpeg path has no equivalent control and ignores both).
+        # awb_gains, when non-empty, takes priority over awb_mode -- same
+        # precedence rpicam-apps itself uses (explicit gains disable the
+        # AWB algorithm outright), so there's no ambiguity about which
+        # wins when a config has stale values in both fields.
+        awb_mode = str(cam_cfg.get("awb_mode", "auto") or "auto").strip().lower()
+        if awb_mode not in _AWB_MODES:
+            self.log.warning("unknown camera.awb_mode %r — falling back to auto", awb_mode)
+            awb_mode = "auto"
+        awb_gains = str(cam_cfg.get("awb_gains", "") or "").strip()
 
         if not (os.path.isfile(_MODEL_PB) and os.path.isfile(_MODEL_PBTXT)):
             self.log.error(
@@ -218,10 +235,10 @@ class CameraModule(SensorModule):
             return
         self._labels = _load_labels(_MODEL_LABELS)
 
-        self._start_stream(device, stream_fps, width, height)
-        self.log.info("camera module running: backend=%s device=%s stream_fps=%s min_interval_s=%s",
+        self._start_stream(device, stream_fps, width, height, awb_mode, awb_gains)
+        self.log.info("camera module running: backend=%s device=%s stream_fps=%s min_interval_s=%s awb=%s",
                        self._backend, device if self._backend == "usb" else "(csi, auto)",
-                       stream_fps, min_interval_s)
+                       stream_fps, min_interval_s, awb_gains or awb_mode)
 
         last_restart_attempt = 0.0
         try:
@@ -240,7 +257,7 @@ class CameraModule(SensorModule):
                         recent_stderr = " | ".join(self._stderr_tail) if self._stderr_tail else "(no stderr captured)"
                         self.log.warning("camera stream process not running (exit=%s) — restarting. Recent output: %s",
                                           self._proc.poll() if self._proc else "never started", recent_stderr)
-                        self._start_stream(device, stream_fps, width, height)
+                        self._start_stream(device, stream_fps, width, height, awb_mode, awb_gains)
                 elif (self._last_frame_ts == 0.0
                         and not self._no_frame_warned
                         and (now - self._stream_started_ts) > _NO_FRAME_WARNING_AFTER_S):
@@ -266,11 +283,16 @@ class CameraModule(SensorModule):
     # Persistent warm MJPEG stream
     # ------------------------------------------------------------------
 
-    def _start_stream(self, device: str, fps: float, width: int, height: int) -> None:
+    def _start_stream(self, device: str, fps: float, width: int, height: int,
+                       awb_mode: str = "auto", awb_gains: str = "") -> None:
         if self._backend == "csi":
             cmd = [self._vid_bin, "--codec", "mjpeg", "-t", "0", "--nopreview",
                    "--width", str(width), "--height", str(height),
                    "--framerate", str(fps), "-o", "-"]
+            if awb_gains:
+                cmd += ["--awbgains", awb_gains]
+            elif awb_mode != "auto":
+                cmd += ["--awb", awb_mode]
         else:
             cmd = ["ffmpeg", "-f", "v4l2", "-i", device, "-vf", f"fps={fps}",
                    "-f", "mjpeg", "-q:v", "5", "-"]
