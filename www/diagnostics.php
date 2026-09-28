@@ -630,13 +630,14 @@ const DIAG_TH_PALETTES = {
   gray:    [[0,0,0],[255,255,255]],
 };
 const DIAG_TH_PREFS_KEY = 'tally-diag-thermal-prefs';
-let diagThermalPrefs = { mode: 'temp', smooth: true, palette: 'ironbow' };
+let diagThermalPrefs = { mode: 'temp', smooth: true, palette: 'ironbow', unit: 'C' };
 try {
   const p = JSON.parse(localStorage.getItem(DIAG_TH_PREFS_KEY) || 'null');
   if (p && typeof p === 'object') {
     if (p.mode === 'temp' || p.mode === 'delta') diagThermalPrefs.mode = p.mode;
     if (typeof p.smooth === 'boolean') diagThermalPrefs.smooth = p.smooth;
     if (DIAG_TH_PALETTES[p.palette]) diagThermalPrefs.palette = p.palette;
+    if (p.unit === 'C' || p.unit === 'F') diagThermalPrefs.unit = p.unit;
   }
 } catch (e) { /* localStorage unavailable -- defaults are fine */ }
 
@@ -648,6 +649,15 @@ const diagThermalLuts = {};
 
 function diagThermalSavePrefs() {
   try { localStorage.setItem(DIAG_TH_PREFS_KEY, JSON.stringify(diagThermalPrefs)); } catch (e) { /* ignore */ }
+}
+
+// Display-only unit conversion -- the daemon, config and tuning fields all
+// stay in °C. An absolute temperature converts fully; a *difference* (change
+// from background) only scales by 1.8, no +32 offset.
+function diagThermalFmt(c, isDelta) {
+  const f = diagThermalPrefs.unit === 'F';
+  const v = f ? (isDelta ? c * 1.8 : c * 1.8 + 32) : c;
+  return (isDelta && v >= 0 ? '+' : '') + v.toFixed(1) + (f ? '°F' : '°C');
 }
 
 function diagThermalLut(name) {
@@ -688,6 +698,10 @@ function diagThermalBuildUi(bodyEl) {
           <button type="button" class="diag-thermal-btn" id="diagThSmoothBtn" onclick="diagThermalToggleSmooth()">Smooth</button>
         </span>
         <span class="grp">
+          <button type="button" class="diag-thermal-btn" id="diagThUnitC" onclick="diagThermalSetUnit('C')">°C</button>
+          <button type="button" class="diag-thermal-btn" id="diagThUnitF" onclick="diagThermalSetUnit('F')">°F</button>
+        </span>
+        <span class="grp">
           <label class="mb-0 text-muted" for="diagThPalette">Palette</label>
           <select id="diagThPalette" onchange="diagThermalSetPalette(this.value)">
             <option value="ironbow">Ironbow</option>
@@ -724,6 +738,8 @@ function diagThermalSyncControls() {
   on('diagThModeTemp', diagThermalPrefs.mode === 'temp');
   on('diagThModeDelta', diagThermalPrefs.mode === 'delta');
   on('diagThSmoothBtn', diagThermalPrefs.smooth);
+  on('diagThUnitC', diagThermalPrefs.unit === 'C');
+  on('diagThUnitF', diagThermalPrefs.unit === 'F');
   const sel = document.getElementById('diagThPalette');
   if (sel) sel.value = diagThermalPrefs.palette;
   const canvas = document.getElementById('diagThermalCanvas');
@@ -732,6 +748,7 @@ function diagThermalSyncControls() {
 
 function diagThermalSetMode(m) { diagThermalPrefs.mode = m; diagThermalSavePrefs(); diagThermalSyncControls(); diagThermalDraw(); }
 function diagThermalToggleSmooth() { diagThermalPrefs.smooth = !diagThermalPrefs.smooth; diagThermalSavePrefs(); diagThermalSyncControls(); diagThermalDraw(); }
+function diagThermalSetUnit(u) { if (u === 'C' || u === 'F') { diagThermalPrefs.unit = u; diagThermalSavePrefs(); diagThermalSyncControls(); diagThermalDraw(); } }
 function diagThermalSetPalette(p) { if (DIAG_TH_PALETTES[p]) { diagThermalPrefs.palette = p; diagThermalSavePrefs(); diagThermalDraw(); } }
 function diagThermalFullscreen() {
   const stage = document.getElementById('diagThermalStage');
@@ -820,9 +837,9 @@ function diagThermalDraw() {
     }
     lctx.putImageData(li, 0, 0);
   }
-  const fmt = (v) => (mode === 'temp' ? v.toFixed(1) : '+' + v.toFixed(1)) + '°C';
+  const fmt = (v) => diagThermalFmt(v, mode !== 'temp');
   const loEl = document.getElementById('diagThLegendLo'), hiEl = document.getElementById('diagThLegendHi');
-  if (loEl) loEl.textContent = mode === 'temp' ? fmt(lo) : '0°C';
+  if (loEl) loEl.textContent = fmt(lo);
   if (hiEl) hiEl.textContent = fmt(hi);
 
   const readout = document.getElementById('diagThermalReadout');
@@ -830,8 +847,8 @@ function diagThermalDraw() {
     if (diagThermalHover) {
       const idx = diagThermalHover.r * cols + diagThermalHover.c;
       const d = data.delta_c[idx] ?? 0;
-      const t = haveTemp ? `${data.temp_c[idx].toFixed(1)}°C` : '—';
-      readout.textContent = `Col ${diagThermalHover.c}, row ${diagThermalHover.r} — ${t} (${d >= 0 ? '+' : ''}${d.toFixed(1)}°C vs background)`;
+      const t = haveTemp ? diagThermalFmt(data.temp_c[idx], false) : '—';
+      readout.textContent = `Col ${diagThermalHover.c}, row ${diagThermalHover.r} — ${t} (${diagThermalFmt(d, true)} vs background)`;
     } else if (diagThermalPrefs.mode === 'temp' && !haveTemp) {
       readout.textContent = 'Temperature view needs the daemon restarted on the updated plugin — showing change-from-background for now.';
     } else {
@@ -854,7 +871,7 @@ function diagThermalDraw() {
     if (haveTemp) {
       let mn = Infinity, mx = -Infinity;
       for (const v of data.temp_c) { if (v < mn) mn = v; if (v > mx) mx = v; }
-      range = ` · frame ${mn.toFixed(1)}–${mx.toFixed(1)}°C`;
+      range = ` · frame ${diagThermalFmt(mn, false)} to ${diagThermalFmt(mx, false)}`;
     }
     meta.innerHTML = `${blobCount} heat signature${blobCount === 1 ? '' : 's'} detected${data.tracking ? ` — tracking (dwell ${data.track_dwell_s ?? 0}s)` : ''}${range} ${stale}`;
   }
