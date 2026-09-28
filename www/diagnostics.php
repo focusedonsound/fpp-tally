@@ -43,7 +43,19 @@ ini_set('display_errors', '0');
 .diag-cam-frame { background: #000; border: 1px solid rgba(255,255,255,0.12); border-radius: .4rem; min-height: 220px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .diag-cam-frame img { max-width: 100%; display: block; }
 .diag-cam-auth input[type=password] { width: 100%; padding: .5rem; margin: .5rem 0; background: rgba(255,255,255,0.06); border: 1px solid #555; color: inherit; border-radius: 4px; }
-#diagThermalCanvas { border: 1px solid rgba(255,255,255,0.12); border-radius: .3rem; image-rendering: pixelated; }
+#diagThermalCanvas { display: block; width: 100%; height: auto; border: 1px solid rgba(255,255,255,0.12); border-radius: .3rem; cursor: crosshair; }
+#diagThermalCanvas.pixelated { image-rendering: pixelated; }
+.diag-thermal-stage { max-width: 640px; }
+.diag-thermal-stage:fullscreen { max-width: none; background: #000; padding: 1rem; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.diag-thermal-stage:fullscreen .diag-thermal-canvaswrap { width: min(100%, calc((100vh - 9rem) * 4 / 3)); }
+.diag-thermal-controls { display: flex; flex-wrap: wrap; gap: .4rem .75rem; align-items: center; margin-bottom: .5rem; font-size: .8rem; }
+.diag-thermal-controls .grp { display: inline-flex; gap: .25rem; align-items: center; }
+.diag-thermal-btn { padding: .15rem .55rem; border-radius: .3rem; border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.04); color: inherit; cursor: pointer; font-size: .8rem; }
+.diag-thermal-btn.active { background: #36a2eb; border-color: #36a2eb; color: #fff; font-weight: 600; }
+.diag-thermal-controls select { padding: .1rem .3rem; font-size: .8rem; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); color: inherit; border-radius: .3rem; }
+.diag-thermal-legend { display: flex; align-items: center; gap: .5rem; margin-top: .4rem; font-size: .75rem; color: #999; }
+.diag-thermal-legend canvas { flex: 1; height: 10px; border-radius: 2px; border: 1px solid rgba(255,255,255,0.12); }
+.diag-thermal-readout { min-height: 1.3em; margin-top: .35rem; font-size: .8rem; font-variant-numeric: tabular-nums; }
 .diag-lane-road {
   position: relative; height: 130px; border-radius: .4rem; overflow: hidden;
   border: 2px solid rgba(255,255,255,0.15);
@@ -332,7 +344,7 @@ ini_set('display_errors', '0');
   <div class="col-lg-7">
     <div class="tally-card" id="diagThermalCard">
       <h4 class="diag-collapsible-header" id="hdr-thermal" onclick="diagToggleSection('thermal')">
-        <span><i class="fas fa-fw fa-fire"></i> MLX90640 Thermal — Delta Grid &amp; Tuning</span>
+        <span><i class="fas fa-fw fa-fire"></i> MLX90640 Thermal Camera &amp; Tuning</span>
         <i class="fas fa-chevron-down diag-chevron"></i>
       </h4>
       <div id="body-thermal" class="diag-collapsible-body">
@@ -606,50 +618,225 @@ function diagWifiTable(bodyEl, data, moduleEnabled, offlineNote) {
   bodyEl.innerHTML = html;
 }
 
-// --- Thermal grid -----------------------------------------------------
-function diagThermalColor(delta, threshold) {
-  // Simple black -> orange -> white heatmap, normalized against the
-  // module's own foreground threshold so "just crossed into foreground"
-  // reads as a visible warm color, not a barely-there tint.
-  const t = Math.max(0, Math.min(1, delta / (threshold * 3)));
-  const r = Math.round(255 * Math.min(1, t * 2));
-  const g = Math.round(180 * Math.max(0, t * 2 - 0.5));
-  const b = Math.round(60 * Math.max(0, t - 0.8) * 5);
-  return `rgb(${r},${g},${b})`;
+// --- Thermal view -----------------------------------------------------
+// Renders the MLX90640's 32x24 frame either as absolute temperatures or as
+// change-from-background (what the detector actually keys off), optionally
+// bilinear-smoothed so it reads as an image instead of 768 chunky squares.
+// View preferences are per-browser (localStorage) -- purely cosmetic.
+const DIAG_TH_PALETTES = {
+  ironbow: [[0,0,0],[32,0,100],[120,0,140],[200,30,90],[240,110,20],[255,200,40],[255,255,200],[255,255,255]],
+  hot:     [[0,0,0],[128,0,0],[255,90,0],[255,200,0],[255,255,255]],
+  rainbow: [[0,0,128],[0,100,255],[0,220,180],[120,255,0],[255,230,0],[255,90,0],[200,0,0]],
+  gray:    [[0,0,0],[255,255,255]],
+};
+const DIAG_TH_PREFS_KEY = 'tally-diag-thermal-prefs';
+let diagThermalPrefs = { mode: 'temp', smooth: true, palette: 'ironbow' };
+try {
+  const p = JSON.parse(localStorage.getItem(DIAG_TH_PREFS_KEY) || 'null');
+  if (p && typeof p === 'object') {
+    if (p.mode === 'temp' || p.mode === 'delta') diagThermalPrefs.mode = p.mode;
+    if (typeof p.smooth === 'boolean') diagThermalPrefs.smooth = p.smooth;
+    if (DIAG_TH_PALETTES[p.palette]) diagThermalPrefs.palette = p.palette;
+  }
+} catch (e) { /* localStorage unavailable -- defaults are fine */ }
+
+let diagThermalLast = null;    // most recent thermal_live payload
+let diagThermalRange = null;   // smoothed auto-range for temperature mode
+let diagThermalHover = null;   // {r, c} cell under the pointer
+let diagThermalOff = null;     // offscreen canvas for the interpolated image
+const diagThermalLuts = {};
+
+function diagThermalSavePrefs() {
+  try { localStorage.setItem(DIAG_TH_PREFS_KEY, JSON.stringify(diagThermalPrefs)); } catch (e) { /* ignore */ }
 }
 
-function diagRenderThermal(bodyEl, data, moduleEnabled) {
-  if (!moduleEnabled) {
-    bodyEl.innerHTML = `<div class="text-muted small">Module not enabled in Setup.</div>`;
-    return;
+function diagThermalLut(name) {
+  if (diagThermalLuts[name]) return diagThermalLuts[name];
+  const stops = DIAG_TH_PALETTES[name] || DIAG_TH_PALETTES.ironbow;
+  const lut = new Uint8ClampedArray(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const pos = (i / 255) * (stops.length - 1);
+    const a = Math.min(stops.length - 2, Math.floor(pos));
+    const f = pos - a;
+    for (let k = 0; k < 3; k++) lut[i * 3 + k] = stops[a][k] + (stops[a + 1][k] - stops[a][k]) * f;
   }
-  if (!data) {
-    bodyEl.innerHTML = `<div class="text-muted small">No thermal data yet — waiting for the daemon.</div>`;
-    return;
-  }
+  diagThermalLuts[name] = lut;
+  return lut;
+}
 
-  let canvas = document.getElementById('diagThermalCanvas');
-  if (!canvas) {
-    bodyEl.innerHTML = '<canvas id="diagThermalCanvas"></canvas><div class="text-muted small mt-2" id="diagThermalMeta"></div>';
-    canvas = document.getElementById('diagThermalCanvas');
+function diagThermalInterp(vals, cols, rows, fx, fy) {
+  fx = Math.max(0, Math.min(cols - 1, fx));
+  fy = Math.max(0, Math.min(rows - 1, fy));
+  const x0 = Math.floor(fx), y0 = Math.floor(fy);
+  const x1 = Math.min(cols - 1, x0 + 1), y1 = Math.min(rows - 1, y0 + 1);
+  const tx = fx - x0, ty = fy - y0;
+  const a = vals[y0 * cols + x0] ?? 0, b = vals[y0 * cols + x1] ?? 0;
+  const c = vals[y1 * cols + x0] ?? 0, d = vals[y1 * cols + x1] ?? 0;
+  return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
+}
+
+function diagThermalBuildUi(bodyEl) {
+  const fsOk = !!document.documentElement.requestFullscreen;
+  bodyEl.innerHTML = `
+    <div class="diag-thermal-stage" id="diagThermalStage">
+      <div class="diag-thermal-controls">
+        <span class="grp">
+          <button type="button" class="diag-thermal-btn" id="diagThModeTemp" onclick="diagThermalSetMode('temp')">Temperature</button>
+          <button type="button" class="diag-thermal-btn" id="diagThModeDelta" onclick="diagThermalSetMode('delta')">Change</button>
+        </span>
+        <span class="grp">
+          <button type="button" class="diag-thermal-btn" id="diagThSmoothBtn" onclick="diagThermalToggleSmooth()">Smooth</button>
+        </span>
+        <span class="grp">
+          <label class="mb-0 text-muted" for="diagThPalette">Palette</label>
+          <select id="diagThPalette" onchange="diagThermalSetPalette(this.value)">
+            <option value="ironbow">Ironbow</option>
+            <option value="hot">Hot</option>
+            <option value="rainbow">Rainbow</option>
+            <option value="gray">Grayscale</option>
+          </select>
+        </span>
+        ${fsOk ? '<span class="grp"><button type="button" class="diag-thermal-btn" id="diagThFullBtn" onclick="diagThermalFullscreen()"><i class="fas fa-expand"></i> Fullscreen</button></span>' : ''}
+      </div>
+      <div class="diag-thermal-canvaswrap"><canvas id="diagThermalCanvas"></canvas></div>
+      <div class="diag-thermal-legend">
+        <span id="diagThLegendLo"></span><canvas id="diagThLegend" width="256" height="1"></canvas><span id="diagThLegendHi"></span>
+      </div>
+      <div class="diag-thermal-readout text-muted" id="diagThermalReadout"></div>
+      <div class="text-muted small mt-1" id="diagThermalMeta"></div>
+    </div>`;
+  const canvas = document.getElementById('diagThermalCanvas');
+  const cellAt = (e) => {
+    const d = diagThermalLast;
+    if (!d) return null;
+    const rc = canvas.getBoundingClientRect();
+    const c = Math.floor((e.clientX - rc.left) / rc.width * d.cols);
+    const r = Math.floor((e.clientY - rc.top) / rc.height * d.rows);
+    return (c >= 0 && c < d.cols && r >= 0 && r < d.rows) ? { r, c } : null;
+  };
+  canvas.addEventListener('pointermove', (e) => { diagThermalHover = cellAt(e); diagThermalDraw(); });
+  canvas.addEventListener('pointerleave', () => { diagThermalHover = null; diagThermalDraw(); });
+  diagThermalSyncControls();
+}
+
+function diagThermalSyncControls() {
+  const on = (id, active) => { const el = document.getElementById(id); if (el) el.classList.toggle('active', active); };
+  on('diagThModeTemp', diagThermalPrefs.mode === 'temp');
+  on('diagThModeDelta', diagThermalPrefs.mode === 'delta');
+  on('diagThSmoothBtn', diagThermalPrefs.smooth);
+  const sel = document.getElementById('diagThPalette');
+  if (sel) sel.value = diagThermalPrefs.palette;
+  const canvas = document.getElementById('diagThermalCanvas');
+  if (canvas) canvas.classList.toggle('pixelated', !diagThermalPrefs.smooth);
+}
+
+function diagThermalSetMode(m) { diagThermalPrefs.mode = m; diagThermalSavePrefs(); diagThermalSyncControls(); diagThermalDraw(); }
+function diagThermalToggleSmooth() { diagThermalPrefs.smooth = !diagThermalPrefs.smooth; diagThermalSavePrefs(); diagThermalSyncControls(); diagThermalDraw(); }
+function diagThermalSetPalette(p) { if (DIAG_TH_PALETTES[p]) { diagThermalPrefs.palette = p; diagThermalSavePrefs(); diagThermalDraw(); } }
+function diagThermalFullscreen() {
+  const stage = document.getElementById('diagThermalStage');
+  if (!stage) return;
+  if (document.fullscreenElement) document.exitFullscreen();
+  else stage.requestFullscreen().catch(() => { /* denied -- nothing to do */ });
+}
+
+function diagThermalDraw() {
+  const data = diagThermalLast;
+  const canvas = document.getElementById('diagThermalCanvas');
+  if (!data || !canvas) return;
+
+  const cols = data.cols, rows = data.rows, K = 4;
+  const haveTemp = Array.isArray(data.temp_c) && data.temp_c.length === cols * rows;
+  const mode = (diagThermalPrefs.mode === 'temp' && haveTemp) ? 'temp' : 'delta';
+  const vals = mode === 'temp' ? data.temp_c : data.delta_c;
+
+  let lo, hi;
+  if (mode === 'temp') {
+    let mn = Infinity, mx = -Infinity;
+    for (const v of vals) { if (v < mn) mn = v; if (v > mx) mx = v; }
+    if (mx - mn < 4) { const mid = (mx + mn) / 2; mn = mid - 2; mx = mid + 2; }
+    // Ease the auto-range between frames so a single warm pixel appearing
+    // doesn't make the whole image flash a different contrast.
+    if (diagThermalRange) { mn = 0.7 * diagThermalRange.lo + 0.3 * mn; mx = 0.7 * diagThermalRange.hi + 0.3 * mx; }
+    diagThermalRange = { lo: mn, hi: mx };
+    lo = mn; hi = mx;
+  } else {
+    lo = 0;
+    hi = Math.max(0.5, (data.delta_threshold_c || 2) * 3);
   }
-  const cellPx = 10;
-  canvas.width = data.cols * cellPx;
-  canvas.height = data.rows * cellPx;
-  const ctx = canvas.getContext('2d');
-  for (let r = 0; r < data.rows; r++) {
-    for (let c = 0; c < data.cols; c++) {
-      const v = data.delta_c[r * data.cols + c] ?? 0;
-      ctx.fillStyle = diagThermalColor(v, data.delta_threshold_c);
-      ctx.fillRect(c * cellPx, r * cellPx, cellPx, cellPx);
+  const span = (hi - lo) || 1;
+  const lut = diagThermalLut(diagThermalPrefs.palette);
+
+  // Colorize at K x resolution (bilinear-interpolated values, not colors,
+  // so gradients stay smooth), then let the browser scale it to the canvas.
+  const W = cols * K, H = rows * K;
+  if (!diagThermalOff) diagThermalOff = document.createElement('canvas');
+  if (diagThermalOff.width !== W) diagThermalOff.width = W;
+  if (diagThermalOff.height !== H) diagThermalOff.height = H;
+  const octx = diagThermalOff.getContext('2d');
+  const img = octx.createImageData(W, H);
+  const px = img.data;
+  const smooth = diagThermalPrefs.smooth;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const v = smooth
+        ? diagThermalInterp(vals, cols, rows, (x + 0.5) / K - 0.5, (y + 0.5) / K - 0.5)
+        : (vals[Math.floor(y / K) * cols + Math.floor(x / K)] ?? 0);
+      const t = (v - lo) / span;
+      const i = t <= 0 ? 0 : (t >= 1 ? 255 : Math.round(t * 255));
+      const o = (y * W + x) * 4;
+      px[o] = lut[i * 3]; px[o + 1] = lut[i * 3 + 1]; px[o + 2] = lut[i * 3 + 2]; px[o + 3] = 255;
     }
   }
-  ctx.strokeStyle = '#36a2eb';
-  ctx.lineWidth = 2;
+  octx.putImageData(img, 0, 0);
+
+  const CW = 640, CH = Math.round(640 * rows / cols);
+  if (canvas.width !== CW) canvas.width = CW;
+  if (canvas.height !== CH) canvas.height = CH;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = smooth;
+  if (smooth) ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(diagThermalOff, 0, 0, CW, CH);
+
+  const cell = CW / cols;
   for (const b of (data.blobs || [])) {
     ctx.beginPath();
-    ctx.arc(b.col * cellPx + cellPx / 2, b.row * cellPx + cellPx / 2, cellPx * 1.2, 0, 2 * Math.PI);
-    ctx.stroke();
+    ctx.arc((b.col + 0.5) * cell, (b.row + 0.5) * cell, cell * 1.2, 0, 2 * Math.PI);
+    ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.stroke();
+    ctx.lineWidth = 2; ctx.strokeStyle = '#36a2eb'; ctx.stroke();
+  }
+  if (diagThermalHover) {
+    ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.strokeRect(diagThermalHover.c * cell + 1, diagThermalHover.r * cell + 1, cell - 2, cell - 2);
+  }
+
+  // Legend bar + end labels
+  const lg = document.getElementById('diagThLegend');
+  if (lg) {
+    const lctx = lg.getContext('2d');
+    const li = lctx.createImageData(256, 1);
+    for (let i = 0; i < 256; i++) {
+      li.data[i * 4] = lut[i * 3]; li.data[i * 4 + 1] = lut[i * 3 + 1]; li.data[i * 4 + 2] = lut[i * 3 + 2]; li.data[i * 4 + 3] = 255;
+    }
+    lctx.putImageData(li, 0, 0);
+  }
+  const fmt = (v) => (mode === 'temp' ? v.toFixed(1) : '+' + v.toFixed(1)) + '°C';
+  const loEl = document.getElementById('diagThLegendLo'), hiEl = document.getElementById('diagThLegendHi');
+  if (loEl) loEl.textContent = mode === 'temp' ? fmt(lo) : '0°C';
+  if (hiEl) hiEl.textContent = fmt(hi);
+
+  const readout = document.getElementById('diagThermalReadout');
+  if (readout) {
+    if (diagThermalHover) {
+      const idx = diagThermalHover.r * cols + diagThermalHover.c;
+      const d = data.delta_c[idx] ?? 0;
+      const t = haveTemp ? `${data.temp_c[idx].toFixed(1)}°C` : '—';
+      readout.textContent = `Col ${diagThermalHover.c}, row ${diagThermalHover.r} — ${t} (${d >= 0 ? '+' : ''}${d.toFixed(1)}°C vs background)`;
+    } else if (diagThermalPrefs.mode === 'temp' && !haveTemp) {
+      readout.textContent = 'Temperature view needs the daemon restarted on the updated plugin — showing change-from-background for now.';
+    } else {
+      readout.textContent = 'Hover over the image to read a pixel.';
+    }
   }
 
   const meta = document.getElementById('diagThermalMeta');
@@ -663,8 +850,28 @@ function diagRenderThermal(bodyEl, data, moduleEnabled) {
     // "heat signature" says the same thing without the "you are an
     // object" framing.
     const blobCount = (data.blobs || []).length;
-    meta.innerHTML = `${blobCount} heat signature${blobCount === 1 ? '' : 's'} detected${data.tracking ? ` — tracking (dwell ${data.track_dwell_s ?? 0}s)` : ''} ${stale}`;
+    let range = '';
+    if (haveTemp) {
+      let mn = Infinity, mx = -Infinity;
+      for (const v of data.temp_c) { if (v < mn) mn = v; if (v > mx) mx = v; }
+      range = ` · frame ${mn.toFixed(1)}–${mx.toFixed(1)}°C`;
+    }
+    meta.innerHTML = `${blobCount} heat signature${blobCount === 1 ? '' : 's'} detected${data.tracking ? ` — tracking (dwell ${data.track_dwell_s ?? 0}s)` : ''}${range} ${stale}`;
   }
+}
+
+function diagRenderThermal(bodyEl, data, moduleEnabled) {
+  if (!moduleEnabled) {
+    bodyEl.innerHTML = `<div class="text-muted small">Module not enabled in Setup.</div>`;
+    return;
+  }
+  if (!data) {
+    bodyEl.innerHTML = `<div class="text-muted small">No thermal data yet — waiting for the daemon.</div>`;
+    return;
+  }
+  if (!document.getElementById('diagThermalCanvas')) diagThermalBuildUi(bodyEl);
+  diagThermalLast = data;
+  diagThermalDraw();
 }
 
 // --- Collapsible sections -------------------------------------------------

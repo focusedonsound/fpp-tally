@@ -251,6 +251,10 @@ class ThermalModule(SensorModule):
                     "cols": GRID_COLS,
                     "rows": GRID_ROWS,
                     "delta_c": [round(d, 1) for d in delta],
+                    # Absolute per-pixel temperatures (°C), for the
+                    # Diagnostics page's real-temperature view. delta_c
+                    # alone only shows change from the learned background.
+                    "temp_c": [round(t, 1) for t in frame_buf],
                     "delta_threshold_c": delta_threshold_c,
                     "blobs": [
                         {"row": round(r, 1), "col": round(c, 1), "size": n}
