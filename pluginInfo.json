@@ -7,6 +7,7 @@
   "srcURL": "https://github.com/focusedonsound/fpp-tally.git",
   "bugURL": "https://github.com/focusedonsound/fpp-tally/issues",
   "allowUpdates": 1,
+  "releaseNotesStyle": "gitRelease",
   "privacy": {
     "summary": "Logs vehicle/crowd events from your local radar, thermal, and BLE/WiFi sensors to a local database and, if you enable it, your own MQTT broker. Sends your email only if you register the web UI.",
     "sends": [
